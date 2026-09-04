@@ -5,7 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
  * Requer: NEXT_PUBLIC_SUPABASE_URL/ANON_KEY no app, E2E_PRESENTER_SECRET e (opcional) E2E_BASE_URL.
  */
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: process.env.PW_TEST_DIR ?? "./e2e",
   timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
