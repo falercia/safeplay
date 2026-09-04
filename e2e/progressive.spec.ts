@@ -21,21 +21,23 @@ test.describe("cenário progressivo em três+ navegadores", () => {
     await b.page.getByLabel("Mensagem").fill("oi Nico");
     await expect(a.page.getByText(/digitando/)).toBeVisible({ timeout: 10_000 });
 
-    // mensagem propagada sem refresh (< 3 s tolerância de rede; meta < 1 s em conexão estável)
+    // mensagem propagada sem refresh. Primeira mensagem tolera cold start da Edge Function (8 s);
+    // a segunda mede o caminho quente (< 3 s de tolerância; meta < 1 s em conexão estável)
     const t0 = Date.now();
     await b.page.getByLabel("Mensagem").press("Enter");
-    await expect(a.page.getByRole("log")).toContainText("oi Nico", { timeout: 3_000 });
-    const deliveryMs = Date.now() - t0;
-    console.log(`entrega B→A: ${deliveryMs} ms`);
+    await expect(a.page.getByRole("log")).toContainText("oi Nico", { timeout: 8_000 });
+    console.log(`entrega B→A (fria): ${Date.now() - t0} ms`);
     await expect(a2.page.getByRole("log")).toContainText("oi Nico", { timeout: 3_000 });
 
     // idempotência/duplicidade: a mesma mensagem não aparece duas vezes
     await expect(a.page.getByRole("log").getByText("oi Nico", { exact: true })).toHaveCount(1);
 
-    // resposta humana de A
+    // resposta humana de A (caminho quente)
     await a.page.getByLabel("Mensagem").fill("oi!! bora jogar?");
+    const t1 = Date.now();
     await a.page.getByLabel("Mensagem").press("Enter");
     await expect(b.page.getByRole("log")).toContainText("bora jogar?", { timeout: 3_000 });
+    console.log(`entrega A→B (quente): ${Date.now() - t1} ms`);
 
     // roteiro sintético: até a mensagem 9 (esperado: Alto + caso)
     await advance(page, 9);
