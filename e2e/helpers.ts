@@ -50,8 +50,8 @@ export async function advance(page: Page, times: number): Promise<void> {
   }
 }
 
-export async function openRole(browser: Browser, url: string): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext();
+export async function openRole(browser: Browser, url: string, viewport?: { width: number; height: number }): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext(viewport ? { viewport } : {});
   const page = await context.newPage();
   await page.goto(url);
   return { context, page };
