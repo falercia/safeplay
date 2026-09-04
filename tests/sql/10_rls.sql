@@ -250,3 +250,22 @@ do $$ begin
   assert (select count(*) from public.profiles where session_id = 'aaaaaaaa-0000-0000-0000-000000000002') = 1, 'personas preservadas';
   assert (select reset_count from public.demo_sessions where id = 'aaaaaaaa-0000-0000-0000-000000000002') = 1, 'contador de reset';
 end $$;
+
+-- ---------- admin_send_message: idempotência, rate limit e contenção ----------
+do $$
+declare r jsonb; i int;
+begin
+  insert into public.profile_bindings (profile_id, auth_user_id) values ('bbbbbbbb-0000-0000-0000-000000000009', '55555555-5555-5555-5555-555555555555') on conflict do nothing;
+  r := public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'oi', 'k1');
+  assert (r->>'duplicate') = 'false', 'primeira inserção';
+  r := public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'oi', 'k1');
+  assert (r->>'duplicate') = 'true', 'reenvio idempotente';
+  r := public.admin_send_message('R-OTHER', '11111111-1111-1111-1111-111111111111', 'oi', 'k2');
+  assert (r->>'error') = 'not_a_member', 'não membro bloqueado';
+  for i in 2..6 loop perform public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'msg', 'k' || i::text); end loop;
+  r := public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'msg', 'k99');
+  assert (r->>'error') = 'rate_limited', 'rate limit por persona';
+  update public.rooms set contained = true where code = 'R-OTHER';
+  r := public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'msg', 'k100');
+  assert (r->>'error') = 'room_contained', 'contenção bloqueia envio';
+end $$;

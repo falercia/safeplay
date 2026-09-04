@@ -11,9 +11,22 @@ const Body = z.object({
   clientSentAt: z.string().datetime().optional(),
 });
 
-const RATE_LIMIT_WINDOW_MS = 10_000;
+const RATE_LIMIT_WINDOW_SECONDS = 10;
 const RATE_LIMIT_MAX = 6;
 
+interface SendResult {
+  error?: string;
+  duplicate?: boolean;
+  id?: string;
+  seq?: number;
+  created_at?: string;
+  room_id?: string;
+}
+
+/**
+ * Persistência primeiro (uma única ida ao banco: membership, contenção, rate limit, idempotência, inserção),
+ * transmissão via Realtime logo após, análise em segundo plano sem bloquear a resposta.
+ */
 Deno.serve(
   handle(async (req) => {
     const admin = adminClient();
@@ -22,52 +35,25 @@ Deno.serve(
     const content = body.content.replace(/\s+/g, " ").trim();
     if (!content) throw new HttpError(400, "empty_message");
 
-    const [roomRes, bindingsRes] = await Promise.all([
-      admin.from("rooms").select("id, session_id, contained").eq("code", body.roomCode).maybeSingle<{ id: string; session_id: string; contained: boolean }>(),
-      admin.from("profile_bindings").select("profile_id").eq("auth_user_id", user.id),
-    ]);
-    const room = roomRes.data;
-    if (!room) throw new HttpError(404, "room_not_found");
-
-    // perfil (persona) deste usuário na sala
-    const myProfiles = (bindingsRes.data ?? []).map((b) => b.profile_id as string);
-    if (myProfiles.length === 0) throw new HttpError(403, "not_a_member");
-    const { data: membership } = await admin.from("room_members").select("profile_id").eq("room_id", room.id).in("profile_id", myProfiles).limit(1).maybeSingle<{ profile_id: string }>();
-    if (!membership) throw new HttpError(403, "not_a_member");
-    const profileId = membership.profile_id;
-
-    if (room.contained) throw new HttpError(423, "room_contained", "Sala em contenção temporária de demonstração. Aguarde a revisão humana.");
-
-    // rate limit simples por persona/sala
-    const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-    const { count } = await admin.from("messages").select("id", { count: "exact", head: true }).eq("room_id", room.id).eq("sender_profile_id", profileId).gte("created_at", since);
-    if ((count ?? 0) >= RATE_LIMIT_MAX) throw new HttpError(429, "rate_limited", "Muitas mensagens em pouco tempo. Aguarde alguns segundos.");
-
-    // persistência primeiro (idempotente por client_msg_id)
-    const { data: inserted, error } = await admin
-      .from("messages")
-      .insert({ room_id: room.id, session_id: room.session_id, sender_profile_id: profileId, content, client_msg_id: body.clientMsgId, source: "human" })
-      .select("id, seq, created_at")
-      .maybeSingle<{ id: string; seq: number; created_at: string }>();
-
-    let message = inserted;
-    let duplicate = false;
-    if (error || !message) {
-      const { data: existing } = await admin
-        .from("messages")
-        .select("id, seq, created_at")
-        .eq("room_id", room.id)
-        .eq("sender_profile_id", profileId)
-        .eq("client_msg_id", body.clientMsgId)
-        .maybeSingle<{ id: string; seq: number; created_at: string }>();
-      if (!existing) throw new HttpError(500, "insert_failed");
-      message = existing;
-      duplicate = true;
-    }
+    const { data, error } = await admin.rpc("admin_send_message", {
+      p_room_code: body.roomCode,
+      p_auth_user: user.id,
+      p_content: content,
+      p_client_msg_id: body.clientMsgId,
+      p_rate_window_seconds: RATE_LIMIT_WINDOW_SECONDS,
+      p_rate_max: RATE_LIMIT_MAX,
+    });
+    if (error) throw new HttpError(500, "insert_failed");
+    const result = data as SendResult;
+    if (result.error === "room_not_found") throw new HttpError(404, "room_not_found");
+    if (result.error === "not_a_member") throw new HttpError(403, "not_a_member");
+    if (result.error === "room_contained") throw new HttpError(423, "room_contained", "Sala em contenção temporária de demonstração. Aguarde a revisão humana.");
+    if (result.error === "rate_limited") throw new HttpError(429, "rate_limited", "Muitas mensagens em pouco tempo. Aguarde alguns segundos.");
+    if (!result.id || !result.room_id) throw new HttpError(500, "insert_failed");
 
     // análise assíncrona: a resposta não espera o motor
-    if (!duplicate) background(runAnalysis(admin, { roomId: room.id, triggerType: "message", triggerMessageId: message.id }));
+    if (!result.duplicate) background(runAnalysis(admin, { roomId: result.room_id, triggerType: "message", triggerMessageId: result.id }));
 
-    return json({ ok: true, message: { id: message.id, seq: message.seq, createdAt: message.created_at }, duplicate });
+    return json({ ok: true, message: { id: result.id, seq: result.seq, createdAt: result.created_at }, duplicate: Boolean(result.duplicate) });
   }),
 );
