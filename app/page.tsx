@@ -33,16 +33,14 @@ export default function Home() {
                 </Link>
               </Button>
               <Button asChild size="lg" variant="outline">
-                <a href="https://github.com" target="_blank" rel="noopener noreferrer">
-                  Ver README
-                </a>
+                <a href="#como-funciona">Como funciona</a>
               </Button>
             </div>
           </div>
           <Image src="/brand/safe-play-logo.png" alt="Logotipo Safe Play" width={220} height={226} priority className="mx-auto hidden md:block" />
         </div>
 
-        <ol className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <ol id="como-funciona" className="mt-12 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {STEPS.map((s) => (
             <li key={s.n} className="panel p-4">
               <div className="font-display text-xs font-bold text-safe-400">{s.n}</div>
