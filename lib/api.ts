@@ -1,6 +1,6 @@
 "use client";
 
-import { ensureAnonSession, getSupabase } from "@/lib/supabase/client";
+import { AuthSessionError, ensureAnonSession, getSupabase } from "@/lib/supabase/client";
 
 export class ApiError extends Error {
   constructor(public code: string, message: string, public status: number) {
@@ -12,7 +12,13 @@ export class ApiError extends Error {
 export async function callFunction<T>(name: string, body: Record<string, unknown>, opts: { presenterCode?: string } = {}): Promise<T> {
   const sb = getSupabase();
   if (!sb) throw new ApiError("not_configured", "Supabase não configurado", 0);
-  const session = await ensureAnonSession();
+  let session: Awaited<ReturnType<typeof ensureAnonSession>>;
+  try {
+    session = await ensureAnonSession();
+  } catch (e) {
+    if (e instanceof AuthSessionError) throw new ApiError(e.code, e.message, 0);
+    throw e;
+  }
   if (!session) throw new ApiError("no_session", "Não foi possível iniciar a sessão anônima", 0);
   const headers: Record<string, string> = {};
   if (opts.presenterCode) headers["x-presenter-code"] = opts.presenterCode;
