@@ -1,0 +1,43 @@
+# Configuração do Supabase CLI para o projeto Safe Play (POC)
+project_id = "safe-play-poc"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public"]
+max_rows = 500
+
+[db]
+port = 54322
+major_version = 17
+
+[realtime]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://*.vercel.app"]
+enable_anonymous_sign_ins = true
+enable_signup = true
+jwt_expiry = 3600
+
+[auth.email]
+enable_signup = false
+
+[functions.send-message]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.join-room]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.demo-control]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.moderation-action]
+verify_jwt = true
+import_map = "./functions/deno.json"

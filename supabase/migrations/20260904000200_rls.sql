@@ -4,6 +4,7 @@
 
 alter table public.demo_sessions enable row level security;
 alter table public.profiles enable row level security;
+alter table public.profile_bindings enable row level security;
 alter table public.rooms enable row level security;
 alter table public.room_members enable row level security;
 alter table public.guardian_links enable row level security;
@@ -29,6 +30,9 @@ create policy demo_sessions_select on public.demo_sessions for select to authent
 -- perfis: visíveis para quem participa da mesma sessão (nomes de personas no chat)
 create policy profiles_select on public.profiles for select to authenticated
   using (session_id in (select app.my_session_ids()) or app.is_presenter(session_id));
+
+create policy profile_bindings_select on public.profile_bindings for select to authenticated
+  using (auth_user_id = auth.uid());
 
 -- salas: membro, responsável vinculado, moderador ou apresentador
 create policy rooms_select on public.rooms for select to authenticated
@@ -84,7 +88,7 @@ create policy risk_signals_select on public.risk_signals for select to authentic
 -- glossário: base global (session_id null) e termos da própria sessão, para moderador/apresentador
 create policy glossary_terms_select on public.glossary_terms for select to authenticated
   using (
-    (session_id is null and exists (select 1 from public.profiles p where p.auth_user_id = auth.uid() and p.role in ('moderator','presenter')))
+    (session_id is null and exists (select 1 from public.profiles p join public.profile_bindings b on b.profile_id = p.id where b.auth_user_id = auth.uid() and p.role in ('moderator','presenter')))
     or (session_id is not null and (app.is_moderator(session_id) or app.is_presenter(session_id)))
     or exists (select 1 from public.demo_sessions s where s.presenter_auth_user_id = auth.uid())
   );

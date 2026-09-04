@@ -13,12 +13,18 @@ insert into public.demo_sessions (id, code, scenario, presenter_auth_user_id) va
   ('aaaaaaaa-0000-0000-0000-000000000001', 'MIT-TEST1', 'progressivo', '44444444-4444-4444-4444-444444444444'),
   ('aaaaaaaa-0000-0000-0000-000000000002', 'MIT-OTHER', 'saudavel', null);
 
-insert into public.profiles (id, session_id, auth_user_id, role, persona_key, display_name) values
-  ('bbbbbbbb-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'player', 'A', 'Nico'),
-  ('bbbbbbbb-0000-0000-0000-000000000002', 'aaaaaaaa-0000-0000-0000-000000000001', null, 'player', 'B', 'Dex_77'),
-  ('bbbbbbbb-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', 'guardian', 'guardian', 'Responsável'),
-  ('bbbbbbbb-0000-0000-0000-000000000004', 'aaaaaaaa-0000-0000-0000-000000000001', '33333333-3333-3333-3333-333333333333', 'moderator', 'moderator', 'Moderador'),
-  ('bbbbbbbb-0000-0000-0000-000000000009', 'aaaaaaaa-0000-0000-0000-000000000002', '55555555-5555-5555-5555-555555555555', 'player', 'A', 'Outro');
+insert into public.profiles (id, session_id, role, persona_key, display_name) values
+  ('bbbbbbbb-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001', 'player', 'A', 'Nico'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'aaaaaaaa-0000-0000-0000-000000000001', 'player', 'B', 'Dex_77'),
+  ('bbbbbbbb-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000001', 'guardian', 'guardian', 'Responsável'),
+  ('bbbbbbbb-0000-0000-0000-000000000004', 'aaaaaaaa-0000-0000-0000-000000000001', 'moderator', 'moderator', 'Moderador'),
+  ('bbbbbbbb-0000-0000-0000-000000000009', 'aaaaaaaa-0000-0000-0000-000000000002', 'player', 'A', 'Outro');
+
+insert into public.profile_bindings (profile_id, auth_user_id) values
+  ('bbbbbbbb-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111'),
+  ('bbbbbbbb-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222222'),
+  ('bbbbbbbb-0000-0000-0000-000000000004', '33333333-3333-3333-3333-333333333333'),
+  ('bbbbbbbb-0000-0000-0000-000000000009', '55555555-5555-5555-5555-555555555555');
 
 insert into public.rooms (id, session_id, code, name) values
   ('cccccccc-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001', 'R-TEST1', 'Arena Nimbus'),
@@ -230,4 +236,17 @@ do $$ begin
   assert (select count(*) from public.cases) = 0, 'reset removeu casos';
   assert (select count(*) from public.demo_sessions) = 1, 'outra sessão preservada';
   assert (select count(*) from public.glossary_terms where session_id is null) >= 6, 'glossário base preservado';
+end $$;
+
+-- ---------- reset de dados preserva estrutura ----------
+insert into public.messages (room_id, session_id, sender_profile_id, content, client_msg_id)
+  values ('cccccccc-0000-0000-0000-000000000002', 'aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000009', 'antes do reset', 'r1');
+insert into public.audit_events (session_id, room_id, event_type, actor_type) values ('aaaaaaaa-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-000000000002', 'x', 'system');
+select public.admin_reset_session_data('aaaaaaaa-0000-0000-0000-000000000002');
+do $$ begin
+  assert (select count(*) from public.messages where session_id = 'aaaaaaaa-0000-0000-0000-000000000002') = 0, 'reset de dados apagou mensagens';
+  assert (select count(*) from public.audit_events where session_id = 'aaaaaaaa-0000-0000-0000-000000000002') = 0, 'reset de dados apagou auditoria';
+  assert (select count(*) from public.rooms where session_id = 'aaaaaaaa-0000-0000-0000-000000000002') = 1, 'sala preservada';
+  assert (select count(*) from public.profiles where session_id = 'aaaaaaaa-0000-0000-0000-000000000002') = 1, 'personas preservadas';
+  assert (select reset_count from public.demo_sessions where id = 'aaaaaaaa-0000-0000-0000-000000000002') = 1, 'contador de reset';
 end $$;

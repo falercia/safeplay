@@ -40,7 +40,6 @@ create index demo_sessions_presenter_idx on public.demo_sessions (presenter_auth
 create table public.profiles (
   id uuid primary key default gen_random_uuid(),
   session_id uuid not null references public.demo_sessions (id) on delete cascade,
-  auth_user_id uuid unique,
   role public.profile_role not null,
   persona_key text not null check (persona_key in ('A', 'B', 'guardian', 'moderator', 'presenter')),
   display_name text not null check (char_length(display_name) between 1 and 40),
@@ -51,6 +50,15 @@ create table public.profiles (
   unique (session_id, persona_key)
 );
 create index profiles_session_idx on public.profiles (session_id);
+
+-- vínculo entre usuário anônimo (auth.users) e persona; várias abas/dispositivos podem assumir a mesma persona na demo
+create table public.profile_bindings (
+  profile_id uuid not null references public.profiles (id) on delete cascade,
+  auth_user_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key (profile_id, auth_user_id)
+);
+create index profile_bindings_user_idx on public.profile_bindings (auth_user_id);
 
 -- ---------- salas ----------
 create table public.rooms (
@@ -339,20 +347,20 @@ create index metric_samples_session_idx on public.metric_samples (session_id, ki
 -- ---------- funções auxiliares para RLS ----------
 create or replace function app.my_profile_ids() returns setof uuid
 language sql stable security definer set search_path = public as $$
-  select id from public.profiles where auth_user_id = auth.uid()
+  select profile_id from public.profile_bindings where auth_user_id = auth.uid()
 $$;
 
 create or replace function app.my_session_ids() returns setof uuid
 language sql stable security definer set search_path = public as $$
-  select session_id from public.profiles where auth_user_id = auth.uid()
+  select p.session_id from public.profiles p join public.profile_bindings b on b.profile_id = p.id where b.auth_user_id = auth.uid()
 $$;
 
 create or replace function app.is_room_member(p_room uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.room_members rm
-    join public.profiles p on p.id = rm.profile_id
-    where rm.room_id = p_room and p.auth_user_id = auth.uid()
+    join public.profile_bindings b on b.profile_id = rm.profile_id
+    where rm.room_id = p_room and b.auth_user_id = auth.uid()
   )
 $$;
 
@@ -360,8 +368,8 @@ create or replace function app.is_room_guardian(p_room uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.guardian_links gl
-    join public.profiles p on p.id = gl.guardian_profile_id
-    where gl.room_id = p_room and p.auth_user_id = auth.uid()
+    join public.profile_bindings b on b.profile_id = gl.guardian_profile_id
+    where gl.room_id = p_room and b.auth_user_id = auth.uid()
   )
 $$;
 
@@ -369,7 +377,8 @@ create or replace function app.is_moderator(p_session uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.profiles p
-    where p.session_id = p_session and p.role = 'moderator' and p.auth_user_id = auth.uid()
+    join public.profile_bindings b on b.profile_id = p.id
+    where p.session_id = p_session and p.role = 'moderator' and b.auth_user_id = auth.uid()
   )
 $$;
 
