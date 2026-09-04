@@ -22,12 +22,15 @@ Deno.serve(
     const content = body.content.replace(/\s+/g, " ").trim();
     if (!content) throw new HttpError(400, "empty_message");
 
-    const { data: room } = await admin.from("rooms").select("id, session_id, contained").eq("code", body.roomCode).maybeSingle<{ id: string; session_id: string; contained: boolean }>();
+    const [roomRes, bindingsRes] = await Promise.all([
+      admin.from("rooms").select("id, session_id, contained").eq("code", body.roomCode).maybeSingle<{ id: string; session_id: string; contained: boolean }>(),
+      admin.from("profile_bindings").select("profile_id").eq("auth_user_id", user.id),
+    ]);
+    const room = roomRes.data;
     if (!room) throw new HttpError(404, "room_not_found");
 
     // perfil (persona) deste usuário na sala
-    const { data: bindings } = await admin.from("profile_bindings").select("profile_id").eq("auth_user_id", user.id);
-    const myProfiles = (bindings ?? []).map((b) => b.profile_id as string);
+    const myProfiles = (bindingsRes.data ?? []).map((b) => b.profile_id as string);
     if (myProfiles.length === 0) throw new HttpError(403, "not_a_member");
     const { data: membership } = await admin.from("room_members").select("profile_id").eq("room_id", room.id).in("profile_id", myProfiles).limit(1).maybeSingle<{ profile_id: string }>();
     if (!membership) throw new HttpError(403, "not_a_member");

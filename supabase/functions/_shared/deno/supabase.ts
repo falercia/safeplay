@@ -15,14 +15,37 @@ export interface AuthUser {
   isAnonymous: boolean;
 }
 
-/** Valida o JWT do usuário (anônimo ou não) contra o Auth do Supabase. */
+/**
+ * Identifica o usuário (anônimo ou não) a partir do JWT.
+ * O gateway do Supabase já valida a assinatura (verify_jwt = true em config.toml); aqui apenas decodificamos
+ * as claims e checamos expiração, evitando uma ida extra ao Auth por requisição (latência de entrega).
+ * Defina AUTH_VERIFY_REMOTE=true para forçar a verificação remota via auth.getUser.
+ */
 export async function requireUser(req: Request, admin: Admin): Promise<AuthUser> {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new HttpError(401, "missing_token");
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data.user) throw new HttpError(401, "invalid_token");
-  return { id: data.user.id, isAnonymous: Boolean(data.user.is_anonymous) };
+  if (Deno.env.get("AUTH_VERIFY_REMOTE") === "true") {
+    const { data, error } = await admin.auth.getUser(token);
+    if (error || !data.user) throw new HttpError(401, "invalid_token");
+    return { id: data.user.id, isAnonymous: Boolean(data.user.is_anonymous) };
+  }
+  const claims = decodeJwtClaims(token);
+  if (!claims || typeof claims.sub !== "string" || claims.role !== "authenticated") throw new HttpError(401, "invalid_token");
+  if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now()) throw new HttpError(401, "token_expired");
+  return { id: claims.sub, isAnonymous: Boolean(claims.is_anonymous) };
+}
+
+function decodeJwtClaims(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 export function requirePresenterSecret(req: Request): void {
