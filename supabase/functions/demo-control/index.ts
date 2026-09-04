@@ -84,12 +84,14 @@ Deno.serve(
         const { data: persona } = await admin.from("profiles").select("id").eq("session_id", session.id).eq("persona_key", line.speaker).single<{ id: string }>();
         if (!room || !persona) throw new HttpError(500, "session_incomplete");
         const cursor = session.script_cursor;
+        // avanço atômico: só quem "ganha" o incremento do cursor insere a mensagem (evita duplo clique/concorrência)
+        const { data: claimed } = await admin.from("demo_sessions").update({ script_cursor: cursor + 1 }).eq("id", session.id).eq("script_cursor", cursor).select("id").maybeSingle<{ id: string }>();
+        if (!claimed) return json({ ok: true, done: false, skipped: true, status: await buildStatus(admin, await loadSession(admin, session.code)) });
         const { data: msg } = await admin
           .from("messages")
           .insert({ room_id: room.id, session_id: session.id, sender_profile_id: persona.id, content: line.text, client_msg_id: `script-${session.reset_count}-${cursor}`, source: "script" })
           .select("id")
           .maybeSingle<{ id: string }>();
-        await admin.from("demo_sessions").update({ script_cursor: cursor + 1 }).eq("id", session.id);
         await admin.from("audit_events").insert({ session_id: session.id, room_id: room.id, event_type: "script.advanced", actor_type: "presenter", payload: { index: cursor, speaker: line.speaker, force_llm: Boolean(line.forceLlm) } });
         if (msg) {
           // síncrono aqui: o apresentador quer ver o efeito ao avançar (o chat já recebeu a mensagem via Realtime)
@@ -177,22 +179,36 @@ async function deleteAnonymousUsers(admin: Admin, sessionId: string, keepUserId:
 
 async function buildStatus(admin: Admin, session: SessionRow) {
   const sc = SCENARIOS[session.scenario];
-  const { data: room } = await admin.from("rooms").select("id, code, name, safety_level, safety_score, contained, analysis_pending").eq("session_id", session.id).limit(1).single();
-  const { data: invites } = await admin.from("invites").select("role, token, profile_id, uses").eq("session_id", session.id);
-  const { data: profiles } = await admin.from("profiles").select("id, persona_key, role, display_name, tagline, avatar").eq("session_id", session.id);
-  const profileIds = (profiles ?? []).map((p) => p.id as string);
-  const { data: bindings } = await admin.from("profile_bindings").select("profile_id").in("profile_id", profileIds);
-  const { count: messages } = await admin.from("messages").select("id", { count: "exact", head: true }).eq("session_id", session.id);
-  const { data: jobs } = await admin.from("analysis_jobs").select("status, degraded, rule_latency_ms, llm_latency_ms, degraded_reason").eq("session_id", session.id);
-  const { data: alerts } = await admin.from("alerts").select("level").eq("session_id", session.id);
-  const { data: cases } = await admin.from("cases").select("status").eq("session_id", session.id);
-  const { data: ledger } = await admin.from("usage_ledger").select("input_tokens, output_tokens, est_cost_usd, cached, status, model").eq("session_id", session.id);
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const { data: dayLedger } = await admin.from("usage_ledger").select("est_cost_usd").gte("created_at", dayStart.toISOString());
-  const { data: samples } = await admin.from("metric_samples").select("kind, value_ms").eq("session_id", session.id);
-  const { data: breaker } = await admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>();
-  const { data: budget } = await admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: Record<string, number> }>();
+  const [roomRes, invitesRes, profilesRes, messagesRes, jobsRes, alertsRes, casesRes, ledgerRes, dayLedgerRes, samplesRes, breakerRes, budgetRes] = await Promise.all([
+    admin.from("rooms").select("id, code, name, safety_level, safety_score, contained, analysis_pending").eq("session_id", session.id).limit(1).single(),
+    admin.from("invites").select("role, token, profile_id, uses").eq("session_id", session.id),
+    admin.from("profiles").select("id, persona_key, role, display_name, tagline, avatar").eq("session_id", session.id),
+    admin.from("messages").select("id", { count: "exact", head: true }).eq("session_id", session.id),
+    admin.from("analysis_jobs").select("status, degraded, rule_latency_ms, llm_latency_ms, degraded_reason").eq("session_id", session.id),
+    admin.from("alerts").select("level").eq("session_id", session.id),
+    admin.from("cases").select("status").eq("session_id", session.id),
+    admin.from("usage_ledger").select("input_tokens, output_tokens, est_cost_usd, cached, status, model").eq("session_id", session.id),
+    admin.from("usage_ledger").select("est_cost_usd").gte("created_at", dayStart.toISOString()),
+    admin.from("metric_samples").select("kind, value_ms").eq("session_id", session.id),
+    admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>(),
+    admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: Record<string, number> }>(),
+  ]);
+  const room = roomRes.data;
+  const invites = invitesRes.data;
+  const profiles = profilesRes.data;
+  const profileIds = (profiles ?? []).map((p) => p.id as string);
+  const { data: bindings } = await admin.from("profile_bindings").select("profile_id").in("profile_id", profileIds);
+  const messages = messagesRes.count;
+  const jobs = jobsRes.data;
+  const alerts = alertsRes.data;
+  const cases = casesRes.data;
+  const ledger = ledgerRes.data;
+  const dayLedger = dayLedgerRes.data;
+  const samples = samplesRes.data;
+  const breaker = breakerRes.data;
+  const budget = budgetRes.data;
   const cfg = claudeConfigFromEnv();
   const dailyBudget = Number(Deno.env.get("DAILY_BUDGET_USD") ?? budget?.value?.daily_budget_usd ?? 2);
   const roomLimit = Number(Deno.env.get("ROOM_LLM_CALL_LIMIT") ?? budget?.value?.room_call_limit ?? 50);

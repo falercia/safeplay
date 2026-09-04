@@ -21,6 +21,7 @@ export function buildSystemPrompt(glossary: GlossaryTerm[]): string {
     `Glossário sintético aprovado (códigos fictícios): ${approved || "nenhum"}.`,
     "Se notar um termo incomum usado como código, liste em candidate_terms; ele NÃO vira sinal sem revisão humana.",
     "",
+    "Seja conciso: no máximo 6 sinais, até 4 message_ids por sinal, note com até 80 caracteres, sem repetir o texto das mensagens.",
     "Responda SOMENTE com um objeto JSON válido, sem texto extra, no formato:",
     '{"risk_score":0-100,"confidence":0-1,"signals":[{"key":"<chave>","message_ids":["id"],"confidence":0-1,"note":"<até 160 caracteres, sem citar a mensagem inteira>"}],"guardian_summary":"<2 a 3 frases em português simples para um responsável, sem jargão, sem acusar>","recommendation":"observar|conversar|revisar|acionar_suporte_humano","candidate_terms":[{"term":"","reason":""}]}',
   ].join("\n");

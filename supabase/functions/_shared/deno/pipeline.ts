@@ -133,58 +133,32 @@ export async function runAnalysis(admin: Admin, req: AnalysisRequest): Promise<v
 
 async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: AnalysisRequest): Promise<void> {
   const t0 = Date.now();
-  const { data: session } = await admin.from("demo_sessions").select("id, settings").eq("id", room.session_id).single<SessionRow>();
-  const { data: msgRows } = await admin
-    .from("messages")
-    .select("id, sender_profile_id, content, created_at, seq")
-    .eq("room_id", room.id)
-    .order("seq", { ascending: false })
-    .limit(LONGITUDINAL_LIMIT);
-  const messages: WindowMessage[] = ((msgRows ?? []) as MessageRow[])
+  // consultas independentes em paralelo (reduz latência entre Edge Function e banco)
+  const [sessionRes, msgRes, prevRes, lastLlmRes, glossaryRes, openCaseRes, lastResolvedRes, budgetRow] = await Promise.all([
+    admin.from("demo_sessions").select("id, settings").eq("id", room.session_id).single<SessionRow>(),
+    admin.from("messages").select("id, sender_profile_id, content, created_at, seq").eq("room_id", room.id).order("seq", { ascending: false }).limit(LONGITUDINAL_LIMIT),
+    admin.from("risk_assessments").select("id, score, level, llm_score, window_message_ids, created_at").eq("room_id", room.id).order("created_at", { ascending: false }).limit(1).maybeSingle<AssessmentRow>(),
+    admin.from("risk_assessments").select("id, score, level, llm_score, window_message_ids, created_at").eq("room_id", room.id).not("llm_score", "is", null).order("created_at", { ascending: false }).limit(1).maybeSingle<AssessmentRow>(),
+    admin.from("glossary_terms").select("term, signal_key, status, version, notes").or(`session_id.is.null,session_id.eq.${room.session_id}`),
+    admin.from("cases").select("id, status, priority, sla_due_at, level").eq("room_id", room.id).in("status", ["open", "in_review", "needs_context"]).maybeSingle<{ id: string; status: string; priority: number; sla_due_at: string; level: Level }>(),
+    admin.from("cases").select("id, status, level, resolved_at").eq("room_id", room.id).in("status", ["confirmed", "dismissed", "contained"]).order("resolved_at", { ascending: false }).limit(1).maybeSingle<{ id: string; status: string; level: Level; resolved_at: string }>(),
+    admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: BudgetSettings }>(),
+  ]);
+  const session = sessionRes.data;
+  const messages: WindowMessage[] = ((msgRes.data ?? []) as MessageRow[])
     .map((m) => ({ id: m.id, senderId: m.sender_profile_id, content: m.content, createdAt: m.created_at, seq: m.seq }))
     .sort((a, b) => a.seq - b.seq);
-
-  const { data: prev } = await admin
-    .from("risk_assessments")
-    .select("id, score, level, llm_score, window_message_ids, created_at")
-    .eq("room_id", room.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<AssessmentRow>();
-  const { data: lastLlm } = await admin
-    .from("risk_assessments")
-    .select("id, score, level, llm_score, window_message_ids, created_at")
-    .eq("room_id", room.id)
-    .not("llm_score", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<AssessmentRow>();
-  const { data: glossaryRows } = await admin
-    .from("glossary_terms")
-    .select("term, signal_key, status, version, notes")
-    .or(`session_id.is.null,session_id.eq.${room.session_id}`);
-  const glossary: GlossaryTerm[] = (glossaryRows ?? []).map((g) => ({
+  const prev = prevRes.data;
+  const lastLlm = lastLlmRes.data;
+  const glossary: GlossaryTerm[] = (glossaryRes.data ?? []).map((g) => ({
     term: g.term as string,
     signal: g.signal_key as GlossaryTerm["signal"],
     status: g.status as GlossaryTerm["status"],
     version: g.version as number,
     notes: g.notes as string,
   }));
-  const { data: openCase } = await admin
-    .from("cases")
-    .select("id, status, priority, sla_due_at, level")
-    .eq("room_id", room.id)
-    .in("status", ["open", "in_review", "needs_context"])
-    .maybeSingle<{ id: string; status: string; priority: number; sla_due_at: string; level: Level }>();
-
-  const { data: lastResolved } = await admin
-    .from("cases")
-    .select("id, status, level, resolved_at")
-    .eq("room_id", room.id)
-    .in("status", ["confirmed", "dismissed", "contained"])
-    .order("resolved_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<{ id: string; status: string; level: Level; resolved_at: string }>();
+  const openCase = openCaseRes.data;
+  const lastResolved = lastResolvedRes.data;
 
   const nowIso = new Date().toISOString();
 
@@ -194,7 +168,6 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
   const ruleLatency = Date.now() - tRule;
 
   // ---- decisão de chamar a LLM ----
-  const budgetRow = await admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: BudgetSettings }>();
   const budgetSettings: BudgetSettings = {
     daily_budget_usd: envNum("DAILY_BUDGET_USD", budgetRow.data?.value?.daily_budget_usd ?? 2),
     room_call_limit: envNum("ROOM_LLM_CALL_LIMIT", budgetRow.data?.value?.room_call_limit ?? 50),
@@ -427,11 +400,11 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
     await admin.from("cases").update({ latest_assessment_id: saved.id }).eq("id", openCase.id);
   }
 
-  await admin.from("rooms").update({ safety_level: a.level, safety_score: a.score, last_assessment_id: saved.id, analysis_pending: false }).eq("id", room.id);
-
   const totalLatency = Date.now() - t0;
   const status = degradedReason ? "degraded" : "completed";
-  await admin
+  await Promise.all([
+    admin.from("rooms").update({ safety_level: a.level, safety_score: a.score, last_assessment_id: saved.id, analysis_pending: false }).eq("id", room.id),
+    admin
     .from("analysis_jobs")
     .update({
       status,
@@ -443,7 +416,8 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
       model: modelUsed,
       finished_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId),
+  ]);
 
   // ---- auditoria ----
   const events: Record<string, unknown>[] = [
@@ -505,11 +479,16 @@ function safeParseLlm(text: string): { ok: true; value: LlmOutput } | { ok: fals
 async function evaluateBudget(admin: Admin, room: RoomRow, session: SessionRow | null, s: BudgetSettings, hasApiKey: boolean, nowIso: string) {
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const { data: dayRows } = await admin.from("usage_ledger").select("est_cost_usd").gte("created_at", dayStart.toISOString());
-  const dailySpent = (dayRows ?? []).reduce((acc, r) => acc + Number(r.est_cost_usd ?? 0), 0);
-  const { count: roomCalls } = await admin.from("usage_ledger").select("id", { count: "exact", head: true }).eq("room_id", room.id).eq("cached", false);
-  const { data: last } = await admin.from("usage_ledger").select("created_at").eq("room_id", room.id).eq("cached", false).order("created_at", { ascending: false }).limit(1).maybeSingle<{ created_at: string }>();
-  const { data: breaker } = await admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>();
+  const [dayRes, roomCallsRes, lastRes, breakerRes] = await Promise.all([
+    admin.from("usage_ledger").select("est_cost_usd").gte("created_at", dayStart.toISOString()),
+    admin.from("usage_ledger").select("id", { count: "exact", head: true }).eq("room_id", room.id).eq("cached", false),
+    admin.from("usage_ledger").select("created_at").eq("room_id", room.id).eq("cached", false).order("created_at", { ascending: false }).limit(1).maybeSingle<{ created_at: string }>(),
+    admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>(),
+  ]);
+  const dailySpent = (dayRes.data ?? []).reduce((acc, r) => acc + Number(r.est_cost_usd ?? 0), 0);
+  const roomCalls = roomCallsRes.count;
+  const last = lastRes.data;
+  const breaker = breakerRes.data;
   return budgetGuard({
     dailySpentUsd: dailySpent,
     dailyBudgetUsd: s.daily_budget_usd,

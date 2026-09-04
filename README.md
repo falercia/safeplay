@@ -72,7 +72,7 @@ Ou use `scripts/deploy-supabase.sh` (lê as variáveis do ambiente).
 | Edge Functions (secrets) | `PRESENTER_SECRET` | sim | protege a Central da demo |
 | Edge Functions (secrets) | `ANTHROPIC_API_KEY` | não | sem ela, modo degradado por regras |
 | Edge Functions (secrets) | `ANTHROPIC_MODEL` | não | padrão `claude-haiku-4-5` |
-| Edge Functions (secrets) | `DAILY_BUDGET_USD`, `ROOM_LLM_CALL_LIMIT`, `LLM_COOLDOWN_SECONDS`, `LLM_MIN_NEW_MESSAGES`, `LLM_TIMEOUT_MS`, `LLM_MAX_TOKENS`, `LLM_PRICE_INPUT_PER_M`, `LLM_PRICE_OUTPUT_PER_M` | não | orçamento e preços (padrões: 2, 50, 15, 3, 8000, 700, 1, 5) |
+| Edge Functions (secrets) | `DAILY_BUDGET_USD`, `ROOM_LLM_CALL_LIMIT`, `LLM_COOLDOWN_SECONDS`, `LLM_MIN_NEW_MESSAGES`, `LLM_TIMEOUT_MS`, `LLM_MAX_TOKENS`, `LLM_PRICE_INPUT_PER_M`, `LLM_PRICE_OUTPUT_PER_M` | não | orçamento e preços (padrões: 2, 50, 15, 3, 8000, 1400, 1, 5) |
 | Playwright | `E2E_PRESENTER_SECRET`, `E2E_BASE_URL`, `PLAYWRIGHT_CHROMIUM_PATH` | para E2E | ver `playwright.config.ts` |
 
 `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` são injetadas automaticamente nas Edge Functions. A service role nunca vai para o cliente.

@@ -24,7 +24,7 @@ export function claudeConfigFromEnv(): ClaudeConfig | null {
     apiKey,
     model: Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-4-5",
     timeoutMs: Number(Deno.env.get("LLM_TIMEOUT_MS") ?? 8000),
-    maxTokens: Number(Deno.env.get("LLM_MAX_TOKENS") ?? 700),
+    maxTokens: Number(Deno.env.get("LLM_MAX_TOKENS") ?? 1400),
   };
 }
 

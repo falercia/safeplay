@@ -36,9 +36,17 @@ export async function advance(page: Page, times: number): Promise<void> {
   for (let i = 0; i < times; i++) {
     const btn = page.getByTestId("advance");
     await expect(btn).toBeEnabled({ timeout: 30_000 });
+    const before = (await btn.textContent()) ?? "";
+    const m = before.match(/\((\d+)\/(\d+)\)/);
+    const current = m ? Number(m[1]) : 0;
+    const total = m ? Number(m[2]) : 0;
     await btn.click();
-    // aguarda a chamada terminar (botão volta a ficar habilitado ou roteiro concluído)
-    await expect(btn).not.toHaveText(/Enviando/, { timeout: 45_000 });
+    // aguarda o contador avançar (ou o roteiro concluir); a análise roda de forma síncrona no servidor
+    if (m && current < total) {
+      await expect(btn).toHaveText(new RegExp(`\\(${current + 1}/${total}\\)|Roteiro concluído`), { timeout: 60_000 });
+    } else {
+      await expect(btn).not.toHaveText(/Enviando/, { timeout: 60_000 });
+    }
   }
 }
 
