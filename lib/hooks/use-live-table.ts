@@ -35,6 +35,11 @@ export interface LiveTable<T> {
  */
 export function useLiveTable<T extends { id: string | number }>(opts: Options<T>): LiveTable<T> {
   const { table, filter, select = "*", orderBy, limit, refetchKey, enabled = true } = opts;
+  // primitivas estáveis para dependências (evita re-assinaturas a cada render)
+  const filterCol = filter?.column ?? null;
+  const filterVal = filter?.value ?? null;
+  const orderCol = orderBy?.column ?? null;
+  const orderAsc = orderBy?.ascending ?? true;
   const [rows, setRows] = React.useState<T[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -48,17 +53,16 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
 
   const sortRows = React.useCallback(
     (list: T[]) => {
-      if (!orderBy) return list;
-      const col = orderBy.column as keyof T;
-      const asc = orderBy.ascending ?? true;
+      if (!orderCol) return list;
+      const col = orderCol as keyof T;
       return [...list].sort((a, b) => {
         const av = a[col] as unknown as string | number;
         const bv = b[col] as unknown as string | number;
         if (av === bv) return 0;
-        return (av < bv ? -1 : 1) * (asc ? 1 : -1);
+        return (av < bv ? -1 : 1) * (orderAsc ? 1 : -1);
       });
     },
-    [orderBy],
+    [orderCol, orderAsc],
   );
 
   const upsertLocal = React.useCallback(
@@ -76,9 +80,9 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
     const sb = getSupabase();
     if (!sb || !enabled) return;
     let q = sb.from(table).select(select);
-    if (filter) q = q.eq(filter.column, filter.value);
+    if (filterCol && filterVal) q = q.eq(filterCol, filterVal);
     if (extraRef.current) q = extraRef.current(q as never) as typeof q;
-    if (orderBy) q = q.order(orderBy.column, { ascending: orderBy.ascending ?? true });
+    if (orderCol) q = q.order(orderCol, { ascending: orderAsc });
     if (limit) q = q.limit(limit);
     const { data, error: err } = await q;
     if (err) {
@@ -93,7 +97,7 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
       });
     }
     setLoading(false);
-  }, [table, select, filter?.column, filter?.value, orderBy, limit, enabled, sortRows]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [table, select, filterCol, filterVal, orderCol, orderAsc, limit, enabled, sortRows]);
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -103,9 +107,9 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
   React.useEffect(() => {
     const sb = getSupabase();
     if (!sb || !enabled) return;
-    const key = `live:${table}:${filter ? `${filter.column}=${filter.value}` : "all"}:${Math.random().toString(36).slice(2, 7)}`;
+    const key = `live:${table}:${filterCol ? `${filterCol}=${filterVal}` : "all"}:${Math.random().toString(36).slice(2, 7)}`;
     const channel: RealtimeChannel = sb.channel(key);
-    const cfg = { event: "*" as const, schema: "public", table, ...(filter ? { filter: `${filter.column}=eq.${filter.value}` } : {}) };
+    const cfg = { event: "*" as const, schema: "public", table, ...(filterCol && filterVal ? { filter: `${filterCol}=eq.${filterVal}` } : {}) };
     channel.on("postgres_changes", cfg, (payload: RealtimePostgresChangesPayload<T>) => {
       if (payload.eventType === "INSERT") {
         const row = payload.new as T;
@@ -133,7 +137,7 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
     return () => {
       void sb.removeChannel(channel);
     };
-  }, [table, filter?.column, filter?.value, enabled, upsertLocal, refetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [table, filterCol, filterVal, enabled, upsertLocal, refetch]);
 
   return { rows, loading, error, connected, refetch, upsertLocal };
 }
