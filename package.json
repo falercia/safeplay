@@ -1,0 +1,49 @@
+{
+  "name": "safe-play-poc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Safe Play — POC acadêmico (MIT Professional Education) de detecção longitudinal de risco em chats de jogos, com alerta parental, revisão humana e trilha de auditoria. Dados exclusivamente sintéticos.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "db:test": "bash scripts/db-test.sh",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "@radix-ui/react-dialog": "1.1.23",
+    "@radix-ui/react-slot": "1.3.3",
+    "@supabase/supabase-js": "2.115.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.41.0",
+    "next": "15.5.25",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwind-merge": "3.6.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@playwright/test": "1.59.1",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "^22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "eslint": "9.39.5",
+    "eslint-config-next": "15.5.25",
+    "postcss": "^8.5.28",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}
