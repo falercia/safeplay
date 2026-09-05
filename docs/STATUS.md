@@ -12,8 +12,10 @@
 3. E2E: `E2E_PRESENTER_SECRET=<código> E2E_BASE_URL=http://localhost:3000 pnpm test:e2e` com o servidor rodando (`pnpm build && pnpm start`).
 4. Capturas para o Plano B: `PW_TEST_DIR=./scripts npx playwright test capture.spec.ts` (ainda não geradas).
 
+## Deploy público
+- Vercel: https://safe-play-poc.vercel.app (projeto `safe-play-poc`, deploy via CLI a partir do container; env NEXT_PUBLIC_* configuradas). Cenário falso positivo validado por E2E contra a URL pública.
+
 ## Pendências
-- Deploy na Vercel (aguardando autorização/token ou importação do repositório pelo Fabio).
 - Gerar `docs/capturas` (script pronto).
 - Ensaio final do roteiro (docs/roteiro-apresentacao.md) com três janelas.
 - Opcional: mover o projeto Supabase para São Paulo (o atual está em us-west-2; latência aceitável, medida acima).
