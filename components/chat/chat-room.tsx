@@ -15,6 +15,7 @@ import type { JobRow, JoinResult, MessageRow, ProfileRow, RoomRow } from "@/lib/
 import { formatShortTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { cn, uuid } from "@/lib/utils";
+import { GameScene, type GamePlayer } from "@/components/game/game-scene";
 
 interface LocalMessage extends MessageRow {
   status?: "sending" | "sent" | "failed";
@@ -121,6 +122,24 @@ function ChatInner({ data, roomCode }: { data: JoinResult; roomCode: string }) {
   }
 
   const isChild = me.persona_key === "A";
+  const gamePlayers: GamePlayer[] = React.useMemo(() => {
+    const lastBySender = new Map<string, LocalMessage>();
+    for (const m of messages.rows) lastBySender.set(m.sender_profile_id, m);
+    return profiles.rows
+      .filter((p) => p.role === "player")
+      .map((p) => {
+        const last = lastBySender.get(p.id);
+        return {
+          id: p.id,
+          name: p.display_name,
+          isMe: p.id === me.id,
+          online: presence.members.some((mm) => mm.profileId === p.id),
+          typing: presence.typing.includes(p.display_name),
+          bubble: last ? { text: last.content, at: new Date(last.created_at).getTime() } : null,
+          slot: (p.persona_key === "A" ? "A" : "B") as "A" | "B",
+        };
+      });
+  }, [profiles.rows, messages.rows, presence.members, presence.typing, me.id]);
   const level = room?.safety_level ?? "baixo";
   const online = presence.members.length;
   const disconnected = !messages.connected && !messages.loading;
@@ -135,14 +154,21 @@ function ChatInner({ data, roomCode }: { data: JoinResult; roomCode: string }) {
           <span className="hidden sm:inline">{presence.connected ? "tempo real" : "reconectando"}</span>
         </span>
       }
-      className="max-h-dvh"
+      className="h-dvh"
+      fullBleed
     >
-      <div className="mx-auto flex h-[calc(100dvh-7.5rem)] max-w-3xl flex-col gap-3">
+      <div className="grid h-[calc(100dvh-5.1rem)] grid-rows-[36vh_1fr] lg:grid-cols-[1fr_400px] lg:grid-rows-1">
+        {/* jogo (simulação) */}
+        <div className="relative min-h-0 border-b border-white/10 lg:border-b-0 lg:border-r">
+          <GameScene players={gamePlayers} roomName={room?.name ?? data.room?.name ?? "Arena Nimbus"} lite={typeof window !== "undefined" && window.innerWidth < 1024} />
+        </div>
+        {/* chat */}
+        <div className="flex min-h-0 flex-col gap-2 bg-navy-950/80 p-2 sm:p-3">
         {/* cabeçalho da sala */}
-        <div className="panel flex items-center justify-between gap-3 px-4 py-3">
+        <div className="panel flex items-center justify-between gap-3 px-3 py-2">
           <div className="min-w-0">
-            <div className="font-display truncate text-base font-semibold">{room?.name ?? data.room?.name ?? "Sala"}</div>
-            <div className="truncate text-xs text-ink-300">{t("synthetic_chat")}</div>
+            <div className="font-display truncate text-sm font-semibold">Chat da sala</div>
+            <div className="truncate text-[11px] text-ink-300">{t("synthetic_chat")}</div>
           </div>
           <div className="flex items-center gap-2">
             <Badge title="Participantes online">
@@ -168,7 +194,7 @@ function ChatInner({ data, roomCode }: { data: JoinResult; roomCode: string }) {
         </div>
 
         {/* mensagens */}
-        <div ref={listRef} className="scrollbar-thin panel-strong flex-1 overflow-y-auto p-3 sm:p-4" role="log" aria-live="polite" aria-label="Mensagens">
+        <div ref={listRef} className="scrollbar-thin panel-strong min-h-0 flex-1 overflow-y-auto p-3" role="log" aria-live="polite" aria-label="Mensagens">
           {messages.loading ? <div className="text-center text-sm text-ink-400">Carregando conversa…</div> : null}
           {!messages.loading && visible.length === 0 ? <div className="py-10 text-center text-sm text-ink-400">Nenhuma mensagem ainda. Diga oi para o time.</div> : null}
           <ul className="flex flex-col gap-2">
@@ -266,6 +292,7 @@ function ChatInner({ data, roomCode }: { data: JoinResult; roomCode: string }) {
         <div className="flex items-center justify-between px-1 text-[10px] text-ink-400">
           <span>{draft.length}/500</span>
           {sendError ? <span className="text-warn-300">{sendError}</span> : <span>Ambiente com proteção contextual e revisão humana</span>}
+        </div>
         </div>
       </div>
     </AppShell>

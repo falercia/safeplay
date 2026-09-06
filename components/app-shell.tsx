@@ -11,12 +11,15 @@ export function AppShell({
   right,
   className,
   compact = false,
+  fullBleed = false,
 }: {
   children: React.ReactNode;
   role?: string;
   right?: React.ReactNode;
   className?: string;
   compact?: boolean;
+  /** sem padding nem largura máxima (telas imersivas, como o jogo) */
+  fullBleed?: boolean;
 }) {
   const { t, lang, setLang } = useT();
   return (
@@ -39,7 +42,7 @@ export function AppShell({
         </div>
         <div className="border-t border-white/5 bg-warn-500/10 px-3 py-1 text-center text-[11px] font-medium text-warn-300">{t("poc_banner")}</div>
       </header>
-      <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-3 py-4 sm:px-5 sm:py-6">
+      <main id="main" className={cn("w-full flex-1", fullBleed ? "min-h-0" : "mx-auto max-w-7xl px-3 py-4 sm:px-5 sm:py-6")}>
         {children}
       </main>
     </div>
