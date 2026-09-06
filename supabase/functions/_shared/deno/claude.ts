@@ -24,7 +24,7 @@ export function claudeConfigFromEnv(): ClaudeConfig | null {
     apiKey,
     model: Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-4-5",
     timeoutMs: Number(Deno.env.get("LLM_TIMEOUT_MS") ?? 8000),
-    maxTokens: Number(Deno.env.get("LLM_MAX_TOKENS") ?? 1400),
+    maxTokens: Number(Deno.env.get("LLM_MAX_TOKENS") ?? 600),
   };
 }
 
@@ -53,7 +53,11 @@ export async function callClaude(cfg: ClaudeConfig, system: string, user: string
         max_tokens: cfg.maxTokens,
         temperature: 0,
         system,
-        messages: [{ role: "user", content: user }],
+        // prefill: a resposta começa direto no JSON, sem preâmbulo
+        messages: [
+          { role: "user", content: user },
+          { role: "assistant", content: "{" },
+        ],
       }),
     });
     if (!res.ok) {
@@ -65,7 +69,7 @@ export async function callClaude(cfg: ClaudeConfig, system: string, user: string
       usage?: { input_tokens?: number; output_tokens?: number };
       model?: string;
     };
-    const text = (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
+    const text = "{" + (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
     return {
       text,
       inputTokens: data.usage?.input_tokens ?? 0,
