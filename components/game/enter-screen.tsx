@@ -35,8 +35,8 @@ export function EnterScreen() {
     setBusy(true);
     setError(null);
     try {
-      const data = await enterGame({ name: name.trim(), accessCode: code.trim() });
-      router.replace(data.currentWorldCode ? `/mundo/${data.currentWorldCode}` : "/lobby");
+      await enterGame({ name: name.trim(), accessCode: code.trim() });
+      router.replace("/lobby");
     } catch (err) {
       setError(friendlyError(err).message);
       setBusy(false);

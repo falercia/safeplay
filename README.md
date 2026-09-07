@@ -16,10 +16,10 @@ Em rotas separadas, cada papel vê o que lhe cabe:
 
 | Rota | Papel | Acesso | O que mostra |
 | --- | --- | --- | --- |
-| `/` → `/entrar` → `/lobby` → `/mundo/[código]` | Jogador | nome + código de acesso do jogo | jogo + chat do mundo |
-| `/moderacao` | Moderador | código de moderação | fila de casos com SLA, evidências, ações humanas com justificativa, auditoria |
+| `/` → `/entrar` → `/lobby` → `/mundo/[código]` | Jogador | nome + código de acesso do jogo | jogo + chat do mundo; "Sair do mundo" devolve ao lobby, onde se cria ou entra em outro |
+| `/moderacao` | Moderador | código de moderação | mundos ativos com nível e score em tempo real, fila de casos com SLA (filtrável por mundo), evidências, ações humanas com justificativa, auditoria |
 | `/responsavel` | Responsável | código de responsável + mundo | nível de risco em linguagem simples, recomendação, evidências mínimas |
-| `/apresentador` | Apresentador | código do apresentador | lista de mundos, avanço do roteiro sintético (3 cenários), métricas, custo medido, Plano B |
+| `/apresentador` | Apresentador | código do apresentador | lista de mundos (encerrar, apagar, apagar encerrados), avanço do roteiro sintético (3 cenários), status dos serviços e modelo, métricas, custo medido, Plano B |
 
 Os códigos ficam nos secrets das Edge Functions (`GAME_ACCESS_CODE`, `MODERATOR_CODE`, `GUARDIAN_CODE`, `PRESENTER_SECRET`) e nunca vão para o cliente.
 
@@ -29,7 +29,7 @@ Os códigos ficam nos secrets das Edge Functions (`GAME_ACCESS_CODE`, `MODERATOR
 | --- | --- | --- |
 | Front-end | Next.js 15 (App Router, TS strict), Tailwind 4, Radix, canvas 2D | telas por papel, jogo simulado, chat em tempo real |
 | Backend | Supabase Postgres + Auth anônimo + Realtime + RLS | persistência, presença, propagação em tempo real, isolamento por papel |
-| Funções | Supabase Edge Functions (Deno) | `game-enter`, `world-create`, `world-join`, `role-login`, `send-message`, `demo-control`, `moderation-action` |
+| Funções | Supabase Edge Functions (Deno) | `game-enter`, `world-create`, `world-join`, `world-leave`, `role-login`, `send-message`, `demo-control`, `moderation-action` |
 | Motor de risco | TypeScript puro em `supabase/functions/_shared/risk` | compartilhado entre Edge Functions e testes (Vitest) |
 | IA | Claude (Haiku por padrão) via Edge Function | uma chamada estruturada por análise, apenas quando o orquestrador justifica |
 | Deploy | Vercel (front) + Supabase hospedado | https://safe-play-poc.vercel.app |
@@ -84,7 +84,7 @@ supabase link --project-ref <ref>
 supabase db push
 supabase secrets set PRESENTER_SECRET=<código> GAME_ACCESS_CODE=<código> MODERATOR_CODE=<código> GUARDIAN_CODE=<código> \
   ANTHROPIC_API_KEY=<chave> ANTHROPIC_MODEL=claude-haiku-4-5 DAILY_BUDGET_USD=2 ROOM_LLM_CALL_LIMIT=50 LLM_COOLDOWN_SECONDS=15 LLM_MIN_NEW_MESSAGES=3
-supabase functions deploy game-enter world-create world-join role-login send-message demo-control moderation-action
+supabase functions deploy game-enter world-create world-join world-leave role-login send-message demo-control moderation-action
 ```
 
 ## Variáveis de ambiente

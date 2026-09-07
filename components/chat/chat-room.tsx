@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, DoorOpen, Lock, RadioTower, SendHorizonal, ShieldCheck, Users, WifiOff } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,17 @@ export interface WorldRoomProps {
 /** Tela do mundo: jogo (simulação) + chat da sala. O jogo não reage ao risco do chat. */
 export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
   const { t } = useT();
+  const router = useRouter();
+  const [leaving, setLeaving] = React.useState(false);
+  async function leave() {
+    setLeaving(true);
+    try {
+      await callFunction("world-leave", {});
+    } catch {
+      /* mesmo com falha, volta ao lobby */
+    }
+    router.push("/lobby");
+  }
   const roomId = initialRoom.id;
   const [draft, setDraft] = React.useState("");
   const [sendError, setSendError] = React.useState<string | null>(null);
@@ -168,10 +179,8 @@ export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
             <span className="hidden sm:inline">{presence.connected ? "tempo real" : "reconectando"}</span>
           </span>
           <span className="chip hidden sm:inline-flex">{me.display_name}</span>
-          <Button asChild variant="ghost" size="sm" aria-label="Voltar ao lobby">
-            <Link href="/lobby">
-              <DoorOpen /> <span className="hidden sm:inline">Lobby</span>
-            </Link>
+          <Button variant="ghost" size="sm" onClick={() => void leave()} disabled={leaving} aria-label="Sair do mundo" data-testid="leave-world">
+            <DoorOpen /> <span className="hidden sm:inline">{leaving ? "Saindo…" : "Sair do mundo"}</span>
           </Button>
         </div>
       </header>

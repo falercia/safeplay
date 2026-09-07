@@ -58,7 +58,21 @@ function LobbyInner({ data, signOut }: { data: GameEnterResult; signOut: () => v
     refetchKey: members.rows.length,
   });
   const open = worlds.rows.filter((w) => w.status === "open");
-  const mine = open.find((w) => w.code === data.currentWorldCode) ?? null;
+  const [currentWorld, setCurrentWorld] = React.useState<string | null>(data.currentWorldCode);
+  const mine = open.find((w) => w.code === currentWorld) ?? null;
+
+  async function leave() {
+    setBusy("leave");
+    setError(null);
+    try {
+      await callFunction("world-leave", {});
+      setCurrentWorld(null);
+    } catch (e) {
+      setError(friendlyError(e).message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function create() {
     setBusy("create");
@@ -134,6 +148,10 @@ function LobbyInner({ data, signOut }: { data: GameEnterResult; signOut: () => v
                 <button type="button" className="font-semibold text-safe-300 underline" onClick={() => router.push(`/mundo/${mine.code}`)}>
                   Voltar para o mundo
                 </button>
+                {" · "}
+                <button type="button" className="font-semibold text-warn-300 underline" onClick={() => void leave()} disabled={busy !== null} data-testid="leave-world">
+                  Sair do mundo
+                </button>
               </div>
             ) : null}
           </GamePanel>
@@ -147,7 +165,7 @@ function LobbyInner({ data, signOut }: { data: GameEnterResult; signOut: () => v
               {!worlds.loading && open.length === 0 ? <li className="rounded-xl border border-dashed border-white/10 p-4 text-center text-sm text-ink-400">Nenhum mundo aberto agora. Crie o primeiro.</li> : null}
               {open.map((w) => {
                 const full = w.players >= w.max_players;
-                const inside = w.code === data.currentWorldCode;
+                const inside = w.code === currentWorld;
                 return (
                   <li key={w.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-navy-900/60 p-3" data-testid="world-item" data-code={w.code}>
                     <div className="min-w-0">
