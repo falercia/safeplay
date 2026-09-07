@@ -1,35 +1,68 @@
 import { expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 export const PRESENTER_SECRET = process.env.E2E_PRESENTER_SECRET ?? "";
+export const GAME_ACCESS_CODE = process.env.E2E_GAME_ACCESS_CODE ?? "";
+export const MODERATOR_CODE = process.env.E2E_MODERATOR_CODE ?? "";
+export const GUARDIAN_CODE = process.env.E2E_GUARDIAN_CODE ?? "";
 
-export interface RoleLinks {
-  playerA: string;
-  playerB: string;
-  guardian: string;
-  moderator: string;
-  sessionCode: string;
-}
-
-export async function openPresenter(page: Page): Promise<void> {
+export function requireCodes(): void {
   expect(PRESENTER_SECRET, "E2E_PRESENTER_SECRET é obrigatório").not.toBe("");
-  await page.goto("/demo");
-  // limpa sessão anterior guardada no navegador
-  await page.evaluate(() => {
-    window.localStorage.removeItem("safe-play-demo-session");
-    window.sessionStorage.removeItem("safe-play-presenter-code");
-  });
-  await page.reload();
-  await page.getByTestId("presenter-code").fill(PRESENTER_SECRET);
-  await page.getByTestId("presenter-enter").click();
+  expect(GAME_ACCESS_CODE, "E2E_GAME_ACCESS_CODE é obrigatório").not.toBe("");
+  expect(MODERATOR_CODE, "E2E_MODERATOR_CODE é obrigatório").not.toBe("");
+  expect(GUARDIAN_CODE, "E2E_GUARDIAN_CODE é obrigatório").not.toBe("");
 }
 
-export async function createSession(page: Page, scenario: "saudavel" | "progressivo" | "falso_positivo"): Promise<RoleLinks> {
-  await openPresenter(page);
-  await page.getByTestId(`create-${scenario}`).click();
-  await expect(page.getByTestId("session-code")).toBeVisible({ timeout: 30_000 });
-  const sessionCode = (await page.getByTestId("session-code").textContent())?.trim() ?? "";
-  const href = async (key: string) => (await page.getByTestId(`link-${key}`).getAttribute("data-href")) ?? "";
-  return { playerA: await href("player-0"), playerB: await href("player-1"), guardian: await href("guardian-0"), moderator: await href("moderator-0"), sessionCode };
+export async function newPage(browser: Browser, viewport?: { width: number; height: number }): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext(viewport ? { viewport } : {});
+  const page = await context.newPage();
+  return { context, page };
+}
+
+/** Tela inicial → Jogar → nome + código → lobby (ou mundo atual). */
+export async function enterGame(page: Page, name: string, code = GAME_ACCESS_CODE): Promise<void> {
+  await page.goto("/");
+  await page.getByTestId("play").click();
+  await page.getByTestId("player-name").fill(name);
+  await page.getByTestId("access-code").fill(code);
+  await page.getByTestId("enter").click();
+}
+
+/** Cria um mundo a partir do lobby e devolve o código (W-XXXX) lido da URL. */
+export async function createWorld(page: Page, name: string): Promise<string> {
+  await expect(page).toHaveURL(/\/lobby/, { timeout: 30_000 });
+  await page.getByTestId("world-name").fill(name);
+  await page.getByTestId("create-world").click();
+  await expect(page).toHaveURL(/\/mundo\/W-[A-Z0-9]+/, { timeout: 30_000 });
+  const m = page.url().match(/\/mundo\/(W-[A-Z0-9]+)/);
+  return m?.[1] ?? "";
+}
+
+export async function joinWorld(page: Page, worldCode: string): Promise<void> {
+  await expect(page).toHaveURL(/\/lobby/, { timeout: 30_000 });
+  const item = page.locator(`[data-testid="world-item"][data-code="${worldCode}"]`);
+  await expect(item).toBeVisible({ timeout: 30_000 });
+  await item.getByTestId("join-world").click();
+  await expect(page).toHaveURL(new RegExp(`/mundo/${worldCode}`), { timeout: 30_000 });
+}
+
+export async function loginRole(page: Page, path: "/moderacao" | "/responsavel" | "/apresentador", code: string, name?: string): Promise<void> {
+  await page.goto(path);
+  if (name) await page.getByTestId("role-name").fill(name);
+  await page.getByTestId("role-code").fill(code);
+  await page.getByTestId("role-enter").click();
+}
+
+export async function pickWorld(page: Page, worldCode: string): Promise<void> {
+  const item = page.locator(`[data-testid="world-option"][data-code="${worldCode}"]`);
+  await expect(item).toBeVisible({ timeout: 30_000 });
+  await item.getByTestId("pick-world").click();
+}
+
+export async function presenterSelectWorld(page: Page, worldCode: string): Promise<void> {
+  const item = page.locator(`[data-testid="presenter-world"][data-code="${worldCode}"]`);
+  await expect(item).toBeVisible({ timeout: 30_000 });
+  await item.click();
+  await expect(page.getByTestId("advance")).toBeVisible({ timeout: 30_000 });
 }
 
 export async function advance(page: Page, times: number): Promise<void> {
@@ -41,7 +74,6 @@ export async function advance(page: Page, times: number): Promise<void> {
     const current = m ? Number(m[1]) : 0;
     const total = m ? Number(m[2]) : 0;
     await btn.click();
-    // aguarda o contador avançar (ou o roteiro concluir); a análise roda de forma síncrona no servidor
     if (m && current < total) {
       await expect(btn).toHaveText(new RegExp(`\\(${current + 1}/${total}\\)|Roteiro concluído`), { timeout: 60_000 });
     } else {
@@ -50,15 +82,9 @@ export async function advance(page: Page, times: number): Promise<void> {
   }
 }
 
-export async function openRole(browser: Browser, url: string, viewport?: { width: number; height: number }): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext(viewport ? { viewport } : {});
-  const page = await context.newPage();
-  await page.goto(url);
-  return { context, page };
-}
-
-export async function deleteSession(page: Page): Promise<void> {
+/** Encerra o mundo pela Central (limpa o lobby para a próxima execução). */
+export async function closeWorld(page: Page): Promise<void> {
   page.once("dialog", (d) => d.accept());
-  const btn = page.getByRole("button", { name: "Apagar" });
+  const btn = page.getByRole("button", { name: "Encerrar mundo" });
   if (await btn.isVisible().catch(() => false)) await btn.click();
 }

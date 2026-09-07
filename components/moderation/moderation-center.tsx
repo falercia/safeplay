@@ -121,6 +121,7 @@ function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () =
                     className={cn("focus-ring w-full rounded-xl border p-3 text-left transition-colors", selectedId === c.id ? "border-sky-400/50 bg-white/8" : "border-white/10 hover:bg-white/5", levelClass(c.level))}
                     data-testid="case-item"
                     data-status={c.status}
+                    data-world={worldOf(c.room_id)?.code ?? ""}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-display text-sm font-bold" style={{ color: "var(--lv)" }}>
