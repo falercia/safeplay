@@ -1,18 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { Bell, BellRing, Eye, HeartHandshake, MessageCircle, RadioTower, ShieldAlert, WifiOff } from "lucide-react";
+import { Bell, BellRing, Eye, HeartHandshake, LogOut, MessageCircle, RadioTower, Repeat, ShieldAlert, WifiOff } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { JoinGate } from "@/components/join-gate";
+import { RoleGate } from "@/components/role-gate";
+import { WorldPicker } from "@/components/world-picker";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge, LevelBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SafetyPulse } from "@/components/safety/safety-pulse";
 import { TransparencyDrawer } from "@/components/safety/transparency";
-import { useJoin } from "@/lib/hooks/use-join";
+import { useLiveTable } from "@/lib/hooks/use-live-table";
 import { useRoomIntel } from "@/lib/hooks/use-room-intel";
 import { getSupabase } from "@/lib/supabase/client";
-import type { JoinResult, Level, Recommendation } from "@/lib/types";
+import type { Level, Recommendation, RoleLoginResult, RoomMemberRow, WatchResult } from "@/lib/types";
 import { ACTION_LABEL, CASE_STATUS_LABEL, formatShortTime, levelClass, levelLabel, recommendationDetail, recommendationLabel, signalLabel, signalPlain } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -24,19 +25,37 @@ const RECO_ICON: Record<Recommendation, React.ComponentType<{ className?: string
   acionar_suporte_humano: HeartHandshake,
 };
 
-export function GuardianPanel({ roomCode, token }: { roomCode: string; token: string | null }) {
-  const join = useJoin(token, "guardian");
+export function GuardianPanel() {
   return (
-    <JoinGate state={join} roleLabel="Responsável">
-      {(data) => <GuardianInner data={data} roomCode={roomCode} />}
-    </JoinGate>
+    <RoleGate role="guardian" roleLabel="Responsável" description="O painel do responsável é protegido por um código validado no servidor (GUARDIAN_CODE). Depois, escolha o mundo em que a criança está jogando." askName>
+      {(data, logout) => <GuardianFlow data={data} logout={logout} />}
+    </RoleGate>
   );
 }
 
-function GuardianInner({ data }: { data: JoinResult; roomCode: string }) {
+function GuardianFlow({ data, logout }: { data: RoleLoginResult; logout: () => void }) {
+  const [world, setWorld] = React.useState<WatchResult["world"] | null>(null);
+  if (!world) {
+    return (
+      <WorldPicker
+        sessionId={data.profile.session_id}
+        roleLabel="Responsável"
+        title="Qual mundo você quer acompanhar?"
+        hint="Você passa a receber o resumo em linguagem simples e os alertas do jogador que criou o mundo."
+        action={{ name: "role-login", body: (code) => ({ action: "watch", worldCode: code }), label: "Acompanhar" }}
+        onDone={(res: WatchResult) => setWorld(res.world)}
+        logout={logout}
+      />
+    );
+  }
+  return <GuardianInner data={data} world={world} onSwitch={() => setWorld(null)} logout={logout} />;
+}
+
+function GuardianInner({ data, world, onSwitch, logout }: { data: RoleLoginResult; world: WatchResult["world"]; onSwitch: () => void; logout: () => void }) {
   const { t } = useT();
-  const roomId = data.room?.id ?? null;
+  const roomId = world.room_id;
   const intel = useRoomIntel(roomId, data.profile.session_id);
+  const members = useLiveTable<RoomMemberRow>({ table: "room_members", filter: { column: "room_id", value: roomId }, select: "room_id, profile_id, joined_at", orderBy: { column: "joined_at", ascending: true }, rowKey: (r) => `${r.room_id}:${r.profile_id}` });
   const [explainOpen, setExplainOpen] = React.useState(false);
   const [toast, setToast] = React.useState<{ level: Level; title: string } | null>(null);
   const seenAlerts = React.useRef<Set<string>>(new Set());
@@ -62,8 +81,8 @@ function GuardianInner({ data }: { data: JoinResult; roomCode: string }) {
   const level: Level = intel.latest?.level ?? intel.room?.safety_level ?? "baixo";
   const reco: Recommendation = intel.latest?.recommendation ?? "observar";
   const RecoIcon = RECO_ICON[reco];
-  const ward = intel.profiles.find((p) => p.persona_key === "A");
-  const other = intel.profiles.find((p) => p.persona_key === "B");
+  const ward = intel.profiles.find((p) => p.id === members.rows[0]?.profile_id);
+  const other = intel.profiles.find((p) => p.id === members.rows[1]?.profile_id);
   const evidence = React.useMemo(() => {
     const ids = new Set(intel.signals.filter((s) => s.assessment_id === intel.latest?.id).flatMap((s) => s.evidence_message_ids));
     return intel.messages.filter((m) => ids.has(m.id));
@@ -81,10 +100,18 @@ function GuardianInner({ data }: { data: JoinResult; roomCode: string }) {
     <AppShell
       role={`${t("role_guardian")} · ${data.profile.display_name}`}
       right={
-        <span className={cn("chip", intel.connected ? "text-safe-300" : "text-warn-300")}>
-          {intel.connected ? <RadioTower className="size-3.5" /> : <WifiOff className="size-3.5" />}
-          <span className="hidden sm:inline">{intel.connected ? "ao vivo" : "reconectando"}</span>
-        </span>
+        <>
+          <span className={cn("chip", intel.connected ? "text-safe-300" : "text-warn-300")}>
+            {intel.connected ? <RadioTower className="size-3.5" /> : <WifiOff className="size-3.5" />}
+            <span className="hidden sm:inline">{intel.connected ? "ao vivo" : "reconectando"}</span>
+          </span>
+          <Button variant="ghost" size="sm" onClick={onSwitch} aria-label="Trocar de mundo">
+            <Repeat /> <span className="hidden sm:inline">{world.name}</span>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={logout} aria-label="Sair">
+            <LogOut />
+          </Button>
+        </>
       }
     >
       {toast ? (

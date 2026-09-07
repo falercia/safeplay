@@ -24,6 +24,8 @@ interface Props {
   roomName: string;
   className?: string;
   lite?: boolean;
+  /** cenário de fundo para menus: sem HUD, etiquetas, balões e contador de fps */
+  backdrop?: boolean;
 }
 
 type Vec = { x: number; y: number };
@@ -105,7 +107,7 @@ const COLORS = {
   B: { main: "#f2801e", light: "#fbc38f", glow: "rgba(242,128,30,0.55)" },
 };
 
-export function GameScene({ players, roomName, className, lite = false }: Props) {
+export function GameScene({ players, roomName, className, lite = false, backdrop = false }: Props) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const playersRef = React.useRef(players);
   playersRef.current = players;
@@ -192,7 +194,7 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
         fpsAcc = 0;
       }
       update(sim, dt, reduced ? 0.4 : 1, lite, assets);
-      draw(ctx, sim, W, H, bg, assets, playersRef.current, roomName, lite, now);
+      draw(ctx, sim, W, H, bg, assets, playersRef.current, roomName, lite, now, backdrop);
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
@@ -204,13 +206,13 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
       ro.disconnect();
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [roomName, lite]);
+  }, [roomName, lite, backdrop]);
 
   return (
     <div className={cn("relative h-full w-full overflow-hidden bg-[#0a1230]", className)} role="img" aria-label={`Simulação visual do jogo ${roomName}. Não é interativa.`}>
       <canvas ref={canvasRef} className="block h-full w-full" />
       {!loaded ? <div className="absolute inset-0 flex items-center justify-center text-sm text-white/60">Carregando o mundo…</div> : null}
-      <div className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-white/50">{fps} fps · simulação</div>
+      {backdrop ? null : <div className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-white/50">{fps} fps · simulação</div>}
     </div>
   );
 }
@@ -449,7 +451,7 @@ function buildSky(W: number, H: number, dpr: number): HTMLCanvasElement {
   return c;
 }
 
-function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg: HTMLCanvasElement | null, a: Assets, players: GamePlayer[], roomName: string, lite: boolean, now: number): void {
+function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg: HTMLCanvasElement | null, a: Assets, players: GamePlayer[], roomName: string, lite: boolean, now: number, backdrop = false): void {
   ctx.clearRect(0, 0, W, H);
   if (bg) ctx.drawImage(bg, 0, 0, W, H);
   const cam = sim.camera; // -1..1
@@ -552,10 +554,10 @@ function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg:
   type Drawable = { y: number; fn: () => void };
   const list: Drawable[] = [];
   for (const e of sim.enemies) list.push({ y: e.kind === "slime" ? e.y : e.y + 0.2, fn: () => drawEnemy(ctx, e, a, W, H, s, cam, sim.time) });
-  list.push({ y: 0.86, fn: () => drawBoss(ctx, sim, a, W, H, s, cam) });
+  list.push({ y: 0.86, fn: () => drawBoss(ctx, sim, a, W, H, s, cam, backdrop) });
   for (const h of sim.heroes) {
     const p = players.find((pp) => pp.slot === h.slot);
-    list.push({ y: h.baseY, fn: () => drawHero(ctx, h, a, W, H, s, cam, p, now) });
+    list.push({ y: h.baseY, fn: () => drawHero(ctx, h, a, W, H, s, cam, p, now, backdrop) });
   }
   list.sort((p, q) => p.y - q.y).forEach((d) => d.fn());
 
@@ -607,7 +609,7 @@ function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg:
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, W, H);
 
-  drawHud(ctx, sim, a, W, H, s, players, roomName, lite);
+  if (!backdrop) drawHud(ctx, sim, a, W, H, s, players, roomName, lite);
 }
 
 function drawMountains(ctx: CanvasRenderingContext2D, W: number, H: number, horizon: number, cam: number): void {
@@ -671,7 +673,7 @@ function heroPose(h: Hero): Pose {
   return "idle";
 }
 
-function drawHero(ctx: CanvasRenderingContext2D, h: Hero, a: Assets, W: number, H: number, s: number, cam: number, p: GamePlayer | undefined, now: number): void {
+function drawHero(ctx: CanvasRenderingContext2D, h: Hero, a: Assets, W: number, H: number, s: number, cam: number, p: GamePlayer | undefined, now: number, backdrop = false): void {
   const x = h.x * W - cam * W * 0.09;
   const y = h.baseY * H;
   const c = COLORS[h.slot];
@@ -699,6 +701,7 @@ function drawHero(ctx: CanvasRenderingContext2D, h: Hero, a: Assets, W: number, 
     ctx.restore();
   }
 
+  if (backdrop) return;
   // etiqueta e barras
   const label = (p?.name ?? (h.slot === "A" ? "Jogador 1" : "Jogador 2")) + (p?.isMe ? " (você)" : "");
   ctx.font = `700 ${12 * Math.max(0.9, s)}px Inter, sans-serif`;
@@ -773,7 +776,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, a: Assets, W: number
   }
 }
 
-function drawBoss(ctx: CanvasRenderingContext2D, sim: Sim, a: Assets, W: number, H: number, s: number, cam: number): void {
+function drawBoss(ctx: CanvasRenderingContext2D, sim: Sim, a: Assets, W: number, H: number, s: number, cam: number, backdrop = false): void {
   const b = sim.boss;
   if (b.phase === "gone") return;
   const x = b.x * W - cam * W * 0.09;
@@ -801,6 +804,7 @@ function drawBoss(ctx: CanvasRenderingContext2D, sim: Sim, a: Assets, W: number,
   ctx.restore();
 
   // barra do chefe
+  if (backdrop) return;
   const w = Math.min(W * 0.4, 400);
   const bx = W / 2 - w / 2;
   const by = 12;

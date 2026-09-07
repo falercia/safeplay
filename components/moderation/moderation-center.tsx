@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { AlertOctagon, BookOpen, CheckCircle2, Clock, Filter, Inbox, RadioTower, RefreshCw, Search, ShieldOff, WifiOff, XCircle } from "lucide-react";
+import { AlertOctagon, BookOpen, CheckCircle2, Clock, Filter, Inbox, LogOut, RadioTower, RefreshCw, Search, ShieldOff, WifiOff, XCircle } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { JoinGate } from "@/components/join-gate";
+import { RoleGate } from "@/components/role-gate";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge, LevelBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,11 +11,10 @@ import { Textarea } from "@/components/ui/input";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { SafetyPulse } from "@/components/safety/safety-pulse";
 import { TransparencyBody } from "@/components/safety/transparency";
-import { useJoin } from "@/lib/hooks/use-join";
 import { useLiveTable } from "@/lib/hooks/use-live-table";
 import { useRoomIntel } from "@/lib/hooks/use-room-intel";
 import { callFunction, ApiError } from "@/lib/api";
-import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, JoinResult, Level } from "@/lib/types";
+import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, Level, RoleLoginResult, WorldRow } from "@/lib/types";
 import { ACTION_LABEL, CASE_STATUS_LABEL, formatCountdown, formatShortTime, levelClass, signalLabel } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -23,12 +22,11 @@ import { cn } from "@/lib/utils";
 type ActionKind = CaseActionRow["action"];
 const ACTIVE: CaseStatus[] = ["open", "in_review", "needs_context"];
 
-export function ModerationCenter({ token }: { token: string | null }) {
-  const join = useJoin(token, "moderator");
+export function ModerationCenter() {
   return (
-    <JoinGate state={join} roleLabel="Moderador">
-      {(data) => <ModerationInner data={data} />}
-    </JoinGate>
+    <RoleGate role="moderator" roleLabel="Moderação" description="A fila de revisão humana é protegida por um código validado no servidor (MODERATOR_CODE). Informe seu nome para que as decisões fiquem assinadas na auditoria." askName>
+      {(data, logout) => <ModerationInner data={data} logout={logout} />}
+    </RoleGate>
   );
 }
 
@@ -41,11 +39,13 @@ function useNow(intervalMs = 1000) {
   return now;
 }
 
-function ModerationInner({ data }: { data: JoinResult }) {
+function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () => void }) {
   const { t } = useT();
   const sessionId = data.profile.session_id;
   const now = useNow();
   const cases = useLiveTable<CaseRow>({ table: "cases", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false } });
+  const worlds = useLiveTable<WorldRow>({ table: "worlds", filter: { column: "session_id", value: sessionId } });
+  const worldOf = React.useCallback((roomId: string) => worlds.rows.find((w) => w.room_id === roomId) ?? null, [worlds.rows]);
   const [levelFilter, setLevelFilter] = React.useState<Level | "todos">("todos");
   const [statusFilter, setStatusFilter] = React.useState<"ativos" | "resolvidos" | "todos">("ativos");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -71,12 +71,17 @@ function ModerationInner({ data }: { data: JoinResult }) {
 
   return (
     <AppShell
-      role={`${t("role_moderator")}`}
+      role={`${t("role_moderator")} · ${data.profile.display_name}`}
       right={
-        <span className={cn("chip", cases.connected ? "text-safe-300" : "text-warn-300")}>
-          {cases.connected ? <RadioTower className="size-3.5" /> : <WifiOff className="size-3.5" />}
-          <span className="hidden sm:inline">{cases.connected ? "fila ao vivo" : "reconectando"}</span>
-        </span>
+        <>
+          <span className={cn("chip", cases.connected ? "text-safe-300" : "text-warn-300")}>
+            {cases.connected ? <RadioTower className="size-3.5" /> : <WifiOff className="size-3.5" />}
+            <span className="hidden sm:inline">{cases.connected ? "fila ao vivo" : "reconectando"}</span>
+          </span>
+          <Button variant="ghost" size="sm" onClick={logout} aria-label="Sair da moderação">
+            <LogOut />
+          </Button>
+        </>
       }
     >
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
@@ -123,7 +128,8 @@ function ModerationInner({ data }: { data: JoinResult }) {
                       </span>
                       <LevelBadge level={c.level} size="sm" />
                     </div>
-                    <div className="mt-1 text-xs text-ink-300">{CASE_STATUS_LABEL[c.status]}</div>
+                    <div className="mt-1 truncate text-xs text-ink-200">{worldOf(c.room_id)?.name ?? "mundo"} <span className="font-mono text-ink-400">{worldOf(c.room_id)?.code ?? ""}</span></div>
+                    <div className="mt-0.5 text-xs text-ink-300">{CASE_STATUS_LABEL[c.status]}</div>
                     <div className={cn("mt-1 flex items-center gap-1 font-mono text-xs", active ? (remaining < 0 ? "text-crit-400" : remaining < 5 * 60000 ? "text-warn-300" : "text-ink-200") : "text-ink-500")}>
                       <Clock className="size-3.5" /> {active ? `SLA ${formatCountdown(remaining)}` : `resolvido ${c.resolved_at ? formatShortTime(c.resolved_at) : ""}`}
                     </div>
@@ -135,13 +141,13 @@ function ModerationInner({ data }: { data: JoinResult }) {
         </Card>
 
         {/* caso */}
-        {selected ? <CaseView key={selected.id} kase={selected} sessionId={sessionId} now={now} /> : <Card className="text-sm text-ink-400">Selecione um caso na fila.</Card>}
+        {selected ? <CaseView key={selected.id} kase={selected} sessionId={sessionId} now={now} world={worldOf(selected.room_id)} /> : <Card className="text-sm text-ink-400">Selecione um caso na fila.</Card>}
       </div>
     </AppShell>
   );
 }
 
-function CaseView({ kase, sessionId, now }: { kase: CaseRow; sessionId: string; now: number }) {
+function CaseView({ kase, sessionId, now, world }: { kase: CaseRow; sessionId: string; now: number; world: WorldRow | null }) {
   const intel = useRoomIntel(kase.room_id, sessionId);
   const [action, setAction] = React.useState<ActionKind | null>(null);
   const [tab, setTab] = React.useState<"caso" | "auditoria" | "glossario">("caso");
@@ -168,7 +174,7 @@ function CaseView({ kase, sessionId, now }: { kase: CaseRow; sessionId: string; 
               <Badge>{CASE_STATUS_LABEL[kase.status]}</Badge>
             </div>
             <div className="mt-1 text-xs text-ink-400">
-              {kase.id.slice(0, 8)} · motivo: {kase.reason.replace(/_/g, " ")} · aberto {formatShortTime(kase.created_at)}
+              {world ? `${world.name} (${world.code}) · ` : ""}{kase.id.slice(0, 8)} · motivo: {kase.reason.replace(/_/g, " ")} · aberto {formatShortTime(kase.created_at)}
             </div>
           </div>
           <div className={cn("font-mono text-2xl font-bold", active ? (remaining < 0 ? "text-crit-400" : "text-ink-50") : "text-ink-500")} aria-label="Contador de SLA" data-testid="sla-counter">

@@ -6,7 +6,7 @@ export interface ProfileRow {
   id: string;
   session_id: string;
   role: "player" | "guardian" | "moderator" | "presenter";
-  persona_key: "A" | "B" | "guardian" | "moderator" | "presenter";
+  persona_key: "A" | "B" | "player" | "guardian" | "moderator" | "presenter";
   display_name: string;
   tagline: string;
   avatar: string;
@@ -160,4 +160,73 @@ export interface JoinResult {
   profile: ProfileRow;
   session: { id: string; code: string; scenario: string };
   room: { id: string; code: string; name: string } | null;
+}
+
+// ---- v2: mundos e entrada por código ----
+
+export type WorldStatus = "open" | "closed";
+
+export interface WorldRow {
+  id: string;
+  session_id: string;
+  room_id: string;
+  code: string;
+  name: string;
+  created_by_profile_id: string | null;
+  status: WorldStatus;
+  scenario: "saudavel" | "progressivo" | "falso_positivo";
+  script_cursor: number;
+  max_players: number;
+  created_at: string;
+  closed_at: string | null;
+}
+
+/** Linha da view `world_lobby` (mundo + contagem e nomes dos jogadores). */
+export interface WorldLobbyRow {
+  id: string;
+  code: string;
+  name: string;
+  status: WorldStatus;
+  created_at: string;
+  max_players: number;
+  session_id: string;
+  room_id: string;
+  players: number;
+  player_names: string;
+  creator_name: string | null;
+}
+
+export interface RoomMemberRow {
+  room_id: string;
+  profile_id: string;
+  joined_at: string;
+}
+
+export interface SessionRef {
+  id: string;
+  code: string;
+}
+
+export interface GameEnterResult {
+  ok: true;
+  profile: ProfileRow;
+  session: SessionRef;
+  currentWorldCode: string | null;
+}
+
+export interface WorldJoinResult {
+  ok: true;
+  world: Pick<WorldRow, "id" | "code" | "name" | "status" | "room_id" | "scenario" | "script_cursor" | "max_players" | "created_at">;
+  room: { id: string; code: string; name: string };
+}
+
+export interface RoleLoginResult {
+  ok: true;
+  profile: ProfileRow;
+  session: SessionRef;
+}
+
+export interface WatchResult {
+  ok: true;
+  world: { id: string; code: string; name: string; room_id: string };
 }

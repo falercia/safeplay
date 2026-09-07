@@ -6,6 +6,8 @@ import { getSupabase } from "@/lib/supabase/client";
 
 interface Options<T> {
   table: string;
+  /** origem do fetch quando diferente da tabela assinada (ex.: uma view sobre a tabela) */
+  source?: string;
   /** coluna e valor para filtro (ex.: room_id = uuid) */
   filter: { column: string; value: string } | null;
   select?: string;
@@ -18,6 +20,8 @@ interface Options<T> {
   extra?: (q: ReturnType<ReturnType<NonNullable<ReturnType<typeof getSupabase>>["from"]>["select"]>) => typeof q;
   onInsert?: (row: T) => void;
   onUpdate?: (row: T) => void;
+  /** chave de identidade quando a tabela não tem coluna `id` (ex.: chaves compostas) */
+  rowKey?: (row: T) => string;
 }
 
 export interface LiveTable<T> {
@@ -33,8 +37,9 @@ export interface LiveTable<T> {
  * Tabela "viva": carga inicial via PostgREST + assinatura Realtime (postgres_changes) com filtro,
  * mesclagem por id, refetch na reconexão (evita lacunas) e prevenção de duplicidade.
  */
-export function useLiveTable<T extends { id: string | number }>(opts: Options<T>): LiveTable<T> {
-  const { table, filter, select = "*", orderBy, limit, refetchKey, enabled = true } = opts;
+export function useLiveTable<T extends object>(opts: Options<T>): LiveTable<T> {
+  const { table, source, filter, select = "*", orderBy, limit, refetchKey, enabled = true } = opts;
+  const from = source ?? table;
   // primitivas estáveis para dependências (evita re-assinaturas a cada render)
   const filterCol = filter?.column ?? null;
   const filterVal = filter?.value ?? null;
@@ -50,6 +55,9 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
   onUpdateRef.current = opts.onUpdate;
   const extraRef = React.useRef(opts.extra);
   extraRef.current = opts.extra;
+  const rowKeyRef = React.useRef(opts.rowKey);
+  rowKeyRef.current = opts.rowKey;
+  const keyOf = React.useCallback((r: Partial<T>): string => (rowKeyRef.current ? rowKeyRef.current(r as T) : String((r as { id?: string | number }).id)), []);
 
   const sortRows = React.useCallback(
     (list: T[]) => {
@@ -68,18 +76,18 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
   const upsertLocal = React.useCallback(
     (row: T) => {
       setRows((prev) => {
-        const idx = prev.findIndex((r) => r.id === row.id);
+        const idx = prev.findIndex((r) => keyOf(r) === keyOf(row));
         const next = idx === -1 ? [...prev, row] : prev.map((r, i) => (i === idx ? { ...r, ...row } : r));
         return sortRows(next);
       });
     },
-    [sortRows],
+    [sortRows, keyOf],
   );
 
   const refetch = React.useCallback(async () => {
     const sb = getSupabase();
     if (!sb || !enabled) return;
-    let q = sb.from(table).select(select);
+    let q = sb.from(from).select(select);
     if (filterCol && filterVal) q = q.eq(filterCol, filterVal);
     if (extraRef.current) q = extraRef.current(q as never) as typeof q;
     if (orderCol) q = q.order(orderCol, { ascending: orderAsc });
@@ -90,14 +98,14 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
     } else {
       setError(null);
       setRows((prev) => {
-        const map = new Map<string | number, T>();
-        for (const r of prev) map.set(r.id, r);
-        for (const r of (data ?? []) as unknown as T[]) map.set(r.id, { ...(map.get(r.id) ?? {}), ...r });
+        const map = new Map<string, T>();
+        for (const r of prev) map.set(keyOf(r), r);
+        for (const r of (data ?? []) as unknown as T[]) map.set(keyOf(r), { ...(map.get(keyOf(r)) ?? {}), ...r });
         return sortRows([...map.values()]);
       });
     }
     setLoading(false);
-  }, [table, select, filterCol, filterVal, orderCol, orderAsc, limit, enabled, sortRows]);
+  }, [from, select, filterCol, filterVal, orderCol, orderAsc, limit, enabled, sortRows, keyOf]);
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -111,6 +119,11 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
     const channel: RealtimeChannel = sb.channel(key);
     const cfg = { event: "*" as const, schema: "public", table, ...(filterCol && filterVal ? { filter: `${filterCol}=eq.${filterVal}` } : {}) };
     channel.on("postgres_changes", cfg, (payload: RealtimePostgresChangesPayload<T>) => {
+      if (source) {
+        // view: a linha do evento não traz as colunas derivadas; recarrega
+        void refetch();
+        return;
+      }
       if (payload.eventType === "INSERT") {
         const row = payload.new as T;
         upsertLocal(row);
@@ -120,8 +133,14 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
         upsertLocal(row);
         onUpdateRef.current?.(row);
       } else if (payload.eventType === "DELETE") {
-        const old = payload.old as Partial<T>;
-        if (old.id !== undefined) setRows((prev) => prev.filter((r) => r.id !== old.id));
+        const old = payload.old as Partial<T> & { id?: string | number };
+        if (rowKeyRef.current) {
+          const fn = rowKeyRef.current;
+          setRows((prev) => prev.filter((r) => keyOf(r) !== fn(old as T)));
+        } else if (old.id !== undefined) {
+          const k = String(old.id);
+          setRows((prev) => prev.filter((r) => keyOf(r) !== k));
+        }
       }
     });
     let wasSubscribed = false;
@@ -137,7 +156,7 @@ export function useLiveTable<T extends { id: string | number }>(opts: Options<T>
     return () => {
       void sb.removeChannel(channel);
     };
-  }, [table, filterCol, filterVal, enabled, upsertLocal, refetch]);
+  }, [table, source, filterCol, filterVal, enabled, upsertLocal, refetch, keyOf]);
 
   return { rows, loading, error, connected, refetch, upsertLocal };
 }

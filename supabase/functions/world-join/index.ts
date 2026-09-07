@@ -38,6 +38,7 @@ Deno.serve(
       await admin.from("room_members").insert({ room_id: world.room_id, profile_id: profile.id });
       await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "world.joined", actor_type: "human", actor_profile_id: profile.id, payload: { world_code: world.code } });
     }
-    return json({ ok: true, world, room: { id: world.room_id, name: world.name } });
+    const { data: room } = await admin.from("rooms").select("code").eq("id", world.room_id).single<{ code: string }>();
+    return json({ ok: true, world, room: { id: world.room_id, code: room?.code ?? "", name: world.name } });
   }),
 );

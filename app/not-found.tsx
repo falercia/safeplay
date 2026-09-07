@@ -7,9 +7,9 @@ export default function NotFound() {
     <AppShell>
       <div className="mx-auto mt-16 max-w-md text-center">
         <h1 className="font-display text-2xl font-bold">Página não encontrada</h1>
-        <p className="mt-2 text-sm text-ink-300">Os painéis são acessados por links de convite gerados na Central da demonstração.</p>
+        <p className="mt-2 text-sm text-ink-300">Jogadores entram pela tela inicial; moderação, responsável e apresentador têm rotas próprias com código.</p>
         <Button asChild className="mt-6">
-          <Link href="/demo">Ir para a Central</Link>
+          <Link href="/">Ir para o início</Link>
         </Button>
       </div>
     </AppShell>
