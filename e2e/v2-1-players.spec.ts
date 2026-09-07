@@ -41,6 +41,6 @@ test("início → entrar → lobby → mundo → chat ao vivo entre dois navegad
 test("código de acesso errado é bloqueado no servidor", async ({ page }) => {
   requireCodes();
   await enterGame(page, "Intruso", "ERRADO-123");
-  await expect(page.getByRole("alert")).toContainText(/inválido/i, { timeout: 30_000 });
+  await expect(page.getByText(/código de acesso inválido/i)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/entrar/);
 });
