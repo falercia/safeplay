@@ -184,3 +184,50 @@ describe("cenários sintéticos (execução por regras)", () => {
     expect(out.assessment.windowMessageIds.length).toBeLessThanOrEqual(12);
   });
 });
+
+describe("memória longitudinal (sinais da LLM e piso de decaimento)", () => {
+  it("frases comuns de aproximação casam com padrões", () => {
+    expect(detectMessageSignals(msg(1, "b", "Voce tem whatsapp?")).map((h) => h.signal)).toContain("migracao_canal");
+    expect(detectMessageSignals(msg(1, "b", "Que legal!! Deve ser um menino bem bonito hehe")).map((h) => h.signal)).toContain("vinculo_progressivo");
+    expect(detectMessageSignals(msg(1, "b", "Quantos anos voce tem? Pra ver se pode jogar rankeada")).map((h) => h.signal)).toContain("informacao_pessoal");
+  });
+
+  it("sinal apontado pela LLM continua contando na avaliação seguinte sem LLM", () => {
+    const msgs = [msg(1, "b", "oi, joga bem hein"), msg(2, "a", "valeu"), msg(3, "b", "me conta mais de voce")];
+    const now1 = new Date(BASE + 70 * 1000).toISOString();
+    const withLlm = evaluate({
+      messages: msgs,
+      nowIso: now1,
+      previousScore: 0,
+      previousLevel: "baixo",
+      llm: {
+        risk_score: 30,
+        confidence: 0.8,
+        signals: [{ key: "vinculo_progressivo", confidence: 0.7, message_ids: ["m3"], note: "intimidade acelerada" }],
+        recommendation: "observar",
+        guardian_summary: "resumo",
+        candidate_terms: [],
+      },
+    });
+    expect(withLlm.assessment.score).toBeGreaterThan(0);
+    const llmHits = withLlm.hits.filter((h) => h.source === "llm");
+    expect(llmHits.length).toBe(1);
+
+    // próxima mensagem inócua, sem LLM: o sinal anterior é lembrado e o score não zera
+    const msgs2 = [...msgs, msg(4, "a", "ok")];
+    const now2 = new Date(BASE + 100 * 1000).toISOString();
+    const without = evaluate({ messages: msgs2, nowIso: now2, previousScore: withLlm.assessment.score, previousLevel: withLlm.assessment.level, previousAt: now1, priorLlmHits: llmHits });
+    expect(without.assessment.contributions.some((c) => c.signal === "vinculo_progressivo" && c.contribution > 0)).toBe(true);
+    expect(without.assessment.score).toBeGreaterThanOrEqual(withLlm.assessment.score - 2);
+  });
+
+  it("piso de decaimento: score não despenca entre avaliações próximas", () => {
+    const msgs = [msg(1, "b", "oi"), msg(2, "a", "oi")];
+    const now = new Date(BASE + 60 * 1000).toISOString();
+    const out = evaluate({ messages: msgs, nowIso: now, previousScore: 40, previousLevel: "atencao", previousAt: new Date(BASE + 30 * 1000).toISOString() });
+    expect(out.assessment.score).toBeGreaterThanOrEqual(39);
+    // meia-hora depois, metade
+    const later = evaluate({ messages: msgs, nowIso: new Date(BASE + 31 * 60 * 1000).toISOString(), previousScore: 40, previousLevel: "atencao", previousAt: new Date(BASE + 60 * 1000).toISOString() });
+    expect(later.assessment.score).toBeLessThanOrEqual(20);
+  });
+});

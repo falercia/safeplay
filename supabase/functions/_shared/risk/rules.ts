@@ -19,6 +19,8 @@ const PATTERNS: Pattern[] = [
   { signal: "vinculo_progressivo", label: "elogio de exclusividade", re: /\b(voce|vc|tu) (e|eh) (diferente|especial|o unico|a unica|melhor que os outros)/, confidence: 0.8 },
   { signal: "vinculo_progressivo", label: "intimidade acelerada", re: /\b(confio (muito )?em voce|voce e meu melhor amig|a gente se entende (demais|muito)|nunca conheci alguem como voce|somos iguais)/, confidence: 0.7 },
   { signal: "vinculo_progressivo", label: "prazer em falar", re: /\b(adoro|amo) (falar|conversar) (com voce|contigo|com vc)/, confidence: 0.55 },
+  { signal: "vinculo_progressivo", label: "comentário sobre aparência", re: /\b(voce|vc|tu) (deve ser|e|eh|parece) (muito |bem |super )?(bonit[oa]|lind[oa]|gat[oa]|fof[oa])|\b(menin[oa]|garot[oa]|guri[a]?) (bem |muito |super )?(bonit[oa]|lind[oa]|gat[oa])|\bque (bonit[oa]|lind[oa]|gat[oa]) (voce|vc) (e|eh|deve ser)/, confidence: 0.7 },
+  { signal: "vinculo_progressivo", label: "elogio insistente ao jogador", re: /\b(voce|vc|tu) (joga|e|eh) (muito|mt|demais|tao) (bem|bom|boa|incrivel|foda)\b.*\b(parabens|nossa|uau|serio)|\b(nossa|uau|serio),? (voce|vc|tu) (joga|e|eh) (muito|mt|demais|tao) (bem|bom|boa|incrivel)/, confidence: 0.35 },
 
   // insistência
   { signal: "insistencia", label: "cobrança de resposta", re: /\b(me )?responde( logo| agora| vai| por favor)?\b|\bpor que (nao|n) (me )?respond|\bta me ignorando|\bnao some\b|\bcade voce\b/, confidence: 0.7 },
@@ -44,6 +46,7 @@ const PATTERNS: Pattern[] = [
 
   // migração de canal
   { signal: "migracao_canal", label: "convite para app externo", re: /\b(vamos|bora|vem|continua|me chama|te chamo|fala comigo) (pro|pra|no|para o|para a|la no|la na) (whats|whatsapp|zap|telegram|discord|insta|instagram|snap|tiktok|outro app|outro lugar|privado|dm)/, confidence: 0.85 },
+  { signal: "migracao_canal", label: "pergunta sobre app externo", re: /\b(voce|vc|tu) (tem|usa|ta no|esta no|ta em|esta em) (whats|whatsapp|zap|zapzap|telegram|discord|insta|instagram|snap|snapchat|tiktok|face|facebook)\b|\b(qual|me passa|me da|passa) (o )?(seu|teu) (whats|whatsapp|zap|insta|instagram|discord|telegram|snap)\b|\bme (add|adiciona|segue) (no|la no) (whats|whatsapp|zap|insta|instagram|discord|telegram|snap)/, confidence: 0.8 },
   { signal: "migracao_canal", label: "sair do ambiente moderado", re: /\b(fora d[oa] jogo|fora daqui|longe do chat|onde ninguem (ve|le|monitora))|\bchamada de video\b|\bme liga\b|\bmanda (seu|teu) (numero|contato)/, confidence: 0.75 },
 
   // recompensa / promessa

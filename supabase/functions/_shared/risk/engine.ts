@@ -13,6 +13,10 @@ export interface EvaluateInput {
   nowIso: string;
   previousScore: number | null;
   previousLevel: Level | null;
+  /** quando a avaliação anterior foi feita (para o piso de decaimento) */
+  previousAt?: string | null;
+  /** sinais apontados pela LLM em avaliações anteriores desta sala (memória longitudinal) */
+  priorLlmHits?: SignalHit[];
   glossary?: GlossaryTerm[];
   config?: ScoringConfig;
   /** tamanho da janela recente enviada à LLM e exibida ao moderador */
@@ -47,7 +51,21 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   const windowMessageIds = window.map((m) => m.id);
 
   // MonitoringAgent + CodedLanguageAgent (regras + glossário aprovado)
-  const ruleHits = detectWindowSignals(messages, { glossary });
+  const deterministicHits = detectWindowSignals(messages, { glossary });
+
+  // memória longitudinal: sinais que a LLM apontou antes continuam valendo (com decaimento),
+  // mesmo quando esta avaliação roda só com regras (cooldown/orçamento)
+  const knownIds = new Set(messages.map((m) => m.id));
+  const seenLlm = new Set<string>();
+  const priorLlmHits: SignalHit[] = [];
+  for (const h of input.priorLlmHits ?? []) {
+    const key = `${h.signal}:${h.messageId}`;
+    if (!knownIds.has(h.messageId) || seenLlm.has(key)) continue;
+    if (deterministicHits.some((d) => d.signal === h.signal && d.messageId === h.messageId)) continue;
+    seenLlm.add(key);
+    priorLlmHits.push({ ...h, source: "llm" });
+  }
+  const ruleHits = [...deterministicHits, ...priorLlmHits];
   const ruleScore = scoreHits(ruleHits, input.nowIso, config);
 
   // mensagem isolada vs padrão acumulado
@@ -69,12 +87,16 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
       for (const id of ids) {
         const m = window.find((w) => w.id === id);
         if (!m) continue;
+        if (seenLlm.has(`${s.key}:${id}`)) continue;
         llmHits.push({ signal: s.key, messageId: id, senderId: m.senderId, at: m.createdAt, pattern: s.note ?? "sinal apontado pela LLM", confidence: s.confidence, source: "llm" });
       }
     }
   }
 
-  const merged = mergeScores({ ruleScore: ruleScore.score, llmScore: llm ? Math.round(llm.risk_score) : null, llmConfidence: llm?.confidence ?? null });
+  const mergedRaw = mergeScores({ ruleScore: ruleScore.score, llmScore: llm ? Math.round(llm.risk_score) : null, llmConfidence: llm?.confidence ?? null });
+  // piso de memória: o score nunca cai mais rápido que a meia-vida entre duas avaliações
+  const floor = decayedFloor(input.previousScore, input.previousAt ?? null, input.nowIso, config.halfLifeMinutes);
+  const merged = mergedRaw.finalScore < floor ? { ...mergedRaw, finalScore: floor } : mergedRaw;
 
   // contribuições finais: regras + sinais só-LLM (contribuição 0 no score, mas evidenciados)
   const contributions = [...ruleScore.contributions];
@@ -144,6 +166,14 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   };
 
   return { assessment, escalation, hits: [...ruleHits, ...llmHits], windowMessageIds };
+}
+
+/** Score anterior decaído pelo tempo decorrido (mesma meia-vida do scoring). Sem timestamp, assume 1 min. */
+export function decayedFloor(previousScore: number | null, previousAt: string | null, nowIso: string, halfLifeMinutes: number): number {
+  if (previousScore === null || previousScore <= 0) return 0;
+  const elapsedMin = previousAt ? Math.max(0, (new Date(nowIso).getTime() - new Date(previousAt).getTime()) / 60000) : 1;
+  if (halfLifeMinutes <= 0) return 0;
+  return Math.floor(previousScore * Math.pow(0.5, elapsedMin / halfLifeMinutes));
 }
 
 const RECO_ORDER = { observar: 0, conversar: 1, revisar: 2, acionar_suporte_humano: 3 } as const;

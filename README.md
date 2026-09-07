@@ -47,6 +47,8 @@ Uma **sessão global** agrega tudo. Cada **mundo** (`worlds`, código `W-XXXX`) 
 
 Score 0 a 100 → nível `baixo | atencao | alto | critico` (limiares 25/50/75), tendência e sinais estruturados com evidências por ID de mensagem. Uma ocorrência isolada nunca ultrapassa "atenção"; combinações coerentes e sequências típicas ganham bônus.
 
+**Memória longitudinal**: sinais apontados pela LLM em avaliações anteriores continuam valendo nas avaliações seguintes (mesmo quando a LLM não é chamada, por cooldown ou orçamento), com o mesmo decaimento das regras; e o score nunca cai mais rápido que a meia-vida entre duas avaliações. Sem isso, uma resposta inócua da vítima derrubaria o score que a LLM tinha acabado de subir.
+
 **Gatilho de LLM** (qualquer um): regra acima do limiar de atenção; 2+ sinais distintos na janela; N novas mensagens desde a última análise; reanálise do moderador; linha do roteiro marcada. Antes da chamada: orçamento diário, limite por sala, cooldown, cache por hash e circuit breaker. Sem LLM disponível, `degraded_mode=true` e o motor determinístico decide sozinho. Resposta validada com Zod, uma tentativa de reparação, depois fallback. A LLM nunca reduz o score abaixo do das regras (postura do projeto: errar para o alerta).
 
 ## Executar localmente

@@ -14,6 +14,7 @@ import {
   type GlossaryTerm,
   type Level,
   type LlmOutput,
+  type SignalHit,
   type WindowMessage,
 } from "../risk/index.ts";
 import { buildSystemPrompt, buildUserPrompt } from "../risk/prompt.ts";
@@ -134,7 +135,7 @@ export async function runAnalysis(admin: Admin, req: AnalysisRequest): Promise<v
 async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: AnalysisRequest): Promise<void> {
   const t0 = Date.now();
   // consultas independentes em paralelo (reduz latência entre Edge Function e banco)
-  const [sessionRes, msgRes, prevRes, lastLlmRes, glossaryRes, openCaseRes, lastResolvedRes, budgetRow] = await Promise.all([
+  const [sessionRes, msgRes, prevRes, lastLlmRes, glossaryRes, openCaseRes, lastResolvedRes, budgetRow, priorSignalsRes] = await Promise.all([
     admin.from("demo_sessions").select("id, settings").eq("id", room.session_id).single<SessionRow>(),
     admin.from("messages").select("id, sender_profile_id, content, created_at, seq").eq("room_id", room.id).order("seq", { ascending: false }).limit(LONGITUDINAL_LIMIT),
     admin.from("risk_assessments").select("id, score, level, llm_score, window_message_ids, created_at").eq("room_id", room.id).order("created_at", { ascending: false }).limit(1).maybeSingle<AssessmentRow>(),
@@ -143,6 +144,7 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
     admin.from("cases").select("id, status, priority, sla_due_at, level").eq("room_id", room.id).in("status", ["open", "in_review", "needs_context"]).maybeSingle<{ id: string; status: string; priority: number; sla_due_at: string; level: Level }>(),
     admin.from("cases").select("id, status, level, resolved_at").eq("room_id", room.id).in("status", ["confirmed", "dismissed", "contained"]).order("resolved_at", { ascending: false }).limit(1).maybeSingle<{ id: string; status: string; level: Level; resolved_at: string }>(),
     admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: BudgetSettings }>(),
+    admin.from("risk_signals").select("signal_key, evidence_message_ids, confidence, source, assessment_id").eq("room_id", room.id).in("source", ["llm", "both"]).order("created_at", { ascending: false }).limit(80),
   ]);
   const session = sessionRes.data;
   const messages: WindowMessage[] = ((msgRes.data ?? []) as MessageRow[])
@@ -162,9 +164,21 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
 
   const nowIso = new Date().toISOString();
 
+  // memória longitudinal: sinais apontados pela LLM em avaliações anteriores (evidências ainda na janela)
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const priorLlmHits: SignalHit[] = [];
+  for (const row of (priorSignalsRes.data ?? []) as { signal_key: string; evidence_message_ids: string[]; confidence: number; source: string }[]) {
+    for (const id of row.evidence_message_ids ?? []) {
+      const m = byId.get(id);
+      if (!m) continue;
+      priorLlmHits.push({ signal: row.signal_key as SignalHit["signal"], messageId: id, senderId: m.senderId, at: m.createdAt, pattern: "sinal apontado pela LLM em avaliação anterior", confidence: Number(row.confidence ?? 0.6), source: "llm" });
+    }
+  }
+  const memory = { previousAt: prev?.created_at ?? null, priorLlmHits };
+
   // ---- passada determinística ----
   const tRule = Date.now();
-  const prelim = evaluate({ messages, nowIso, previousScore: prev?.score ?? null, previousLevel: prev?.level ?? null, glossary, windowSize: WINDOW_SIZE, hasOpenCase: Boolean(openCase) });
+  const prelim = evaluate({ messages, nowIso, previousScore: prev?.score ?? null, previousLevel: prev?.level ?? null, ...memory, glossary, windowSize: WINDOW_SIZE, hasOpenCase: Boolean(openCase) });
   const ruleLatency = Date.now() - tRule;
 
   // ---- decisão de chamar a LLM ----
@@ -258,6 +272,7 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
     nowIso,
     previousScore: prev?.score ?? null,
     previousLevel: prev?.level ?? null,
+    ...memory,
     glossary,
     windowSize: WINDOW_SIZE,
     llm,
