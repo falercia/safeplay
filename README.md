@@ -63,8 +63,14 @@ Sem Docker o Supabase local não sobe; use um projeto hospedado (abaixo). Testes
 pnpm test        # motor de risco (Vitest)
 pnpm db:test     # migrations + RLS em Postgres 16 efêmero, sem Docker
 pnpm lint && pnpm typecheck && pnpm build
-E2E_PRESENTER_SECRET=<código> E2E_BASE_URL=http://localhost:3000 pnpm test:e2e   # Playwright multi-navegador contra Supabase real
+# E2E (Playwright, multi-navegador, contra o Supabase real) em três etapas que compartilham o mundo criado:
+export E2E_BASE_URL=https://safe-play-poc.vercel.app E2E_PRESENTER_SECRET=… E2E_GAME_ACCESS_CODE=… E2E_MODERATOR_CODE=… E2E_GUARDIAN_CODE=…
+npx playwright test e2e/v2-1-players.spec.ts    # início → entrar → lobby → mundo → chat entre dois navegadores; código errado bloqueado
+npx playwright test e2e/v2-2-roteiro.spec.ts    # responsável + moderação + apresentador: roteiro progressivo até Alto e caso único
+npx playwright test e2e/v2-3-decisao.spec.ts    # Crítico, decisão humana com justificativa refletida no responsável, encerrar mundo
 ```
+
+As etapas também geram as capturas de `docs/capturas` (Plano B).
 
 ## Supabase
 
@@ -92,7 +98,7 @@ supabase functions deploy game-enter world-create world-join role-login send-mes
 | Edge Functions (secrets) | `ANTHROPIC_API_KEY` | não | sem ela, modo degradado por regras |
 | Edge Functions (secrets) | `ANTHROPIC_MODEL` | não | padrão `claude-haiku-4-5` |
 | Edge Functions (secrets) | `DAILY_BUDGET_USD`, `ROOM_LLM_CALL_LIMIT`, `LLM_COOLDOWN_SECONDS`, `LLM_MIN_NEW_MESSAGES`, `LLM_TIMEOUT_MS`, `LLM_MAX_TOKENS`, `LLM_PRICE_INPUT_PER_M`, `LLM_PRICE_OUTPUT_PER_M` | não | orçamento e preços (padrões: 2, 50, 15, 3, 8000, 600, 1, 5) |
-| Playwright | `E2E_PRESENTER_SECRET`, `E2E_BASE_URL`, `PLAYWRIGHT_CHROMIUM_PATH` | para E2E | ver `playwright.config.ts` |
+| Playwright | `E2E_BASE_URL`, `E2E_PRESENTER_SECRET`, `E2E_GAME_ACCESS_CODE`, `E2E_MODERATOR_CODE`, `E2E_GUARDIAN_CODE`, `E2E_STATE_FILE`, `PLAYWRIGHT_CHROMIUM_PATH` | para E2E | ver `playwright.config.ts` e `e2e/helpers.ts` |
 
 `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` são injetadas automaticamente nas Edge Functions. A service role nunca vai para o cliente.
 

@@ -89,6 +89,7 @@ function PresenterInner({ data, logout, presenterCode }: { data: RoleLoginResult
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastNote, setLastNote] = React.useState<string | null>(null);
+  const [showClosed, setShowClosed] = React.useState(false);
 
   React.useEffect(() => {
     try {
@@ -255,11 +256,16 @@ function PresenterInner({ data, logout, presenterCode }: { data: RoleLoginResult
                 </CardTitle>
                 <div className="text-xs text-ink-400">Jogadores reais criam mundos na tela inicial. Escolha um para operar o roteiro.</div>
               </div>
-              <Badge>{worlds.filter((w) => w.status === "open").length} aberto(s)</Badge>
+              <div className="flex items-center gap-2">
+                <Badge>{worlds.filter((w) => w.status === "open").length} aberto(s)</Badge>
+                <button type="button" onClick={() => setShowClosed((v) => !v)} className="focus-ring chip hover:bg-white/10">
+                  {showClosed ? "ocultar encerrados" : "mostrar encerrados"}
+                </button>
+              </div>
             </div>
             <ul className="mt-3 flex flex-col gap-2" data-testid="presenter-worlds">
               {worlds.length === 0 ? <li className="rounded-xl border border-dashed border-white/10 p-4 text-center text-sm text-ink-400">Nenhum mundo ainda. Abra a tela inicial em outra janela, entre com nome + código e crie um mundo.</li> : null}
-              {worlds.map((w) => (
+              {worlds.filter((w) => showClosed || w.status === "open").map((w) => (
                 <li key={w.id}>
                   <button
                     type="button"
