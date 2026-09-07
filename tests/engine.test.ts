@@ -9,6 +9,7 @@ import {
   LlmOutputSchema,
   matchGlossary,
   mergeScores,
+  riskFocusProfile,
   SCENARIOS,
   scoreHits,
   shouldCallLlm,
@@ -229,5 +230,33 @@ describe("memória longitudinal (sinais da LLM e piso de decaimento)", () => {
     // meia-hora depois, metade
     const later = evaluate({ messages: msgs, nowIso: new Date(BASE + 31 * 60 * 1000).toISOString(), previousScore: 40, previousLevel: "atencao", previousAt: new Date(BASE + 60 * 1000).toISOString() });
     expect(later.assessment.score).toBeLessThanOrEqual(20);
+  });
+});
+
+describe("direcionamento do aviso de acolhimento (riskFocusProfile)", () => {
+  const hit = (senderId: string, confidence: number) => ({ senderId, confidence });
+
+  it("aponta quem concentra o peso dos sinais", () => {
+    expect(riskFocusProfile([hit("A", 0.8), hit("A", 0.7), hit("B", 0.2)])).toBe("A");
+  });
+
+  it("devolve null sem sinais ou quando os pesos estão equilibrados", () => {
+    expect(riskFocusProfile([])).toBeNull();
+    expect(riskFocusProfile([hit("A", 0.5), hit("B", 0.5)])).toBeNull();
+    expect(riskFocusProfile([hit("A", 0.55), hit("B", 0.45)])).toBeNull();
+  });
+
+  it("no cenário progressivo, o foco recai sobre quem emite os sinais e a vítima segue recebendo o aviso", () => {
+    const progressive = SCENARIOS.progressivo;
+    expect(progressive).toBeDefined();
+    const msgs: WindowMessage[] = progressive!.script.map((step, i) => ({
+      id: `m${i}`,
+      seq: i + 1,
+      senderId: step.speaker === "A" ? "vitima" : "emissor",
+      content: step.text,
+      createdAt: new Date(BASE + i * 60 * 1000).toISOString(),
+    }));
+    const out = evaluate({ messages: msgs, nowIso: new Date(BASE + msgs.length * 60 * 1000).toISOString(), previousScore: null, previousLevel: null });
+    expect(riskFocusProfile(out.hits)).toBe("emissor");
   });
 });

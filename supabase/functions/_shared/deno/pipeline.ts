@@ -9,6 +9,7 @@ import {
   LEVEL_ORDER,
   LlmOutputSchema,
   RECOMMENDATION_LABEL,
+  riskFocusProfile,
   RULES_VERSION,
   shouldCallLlm,
   type GlossaryTerm,
@@ -282,6 +283,8 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
   });
   const a = final.assessment;
   const esc = final.escalation;
+  // direcionamento da comunicação: quem concentra os sinais (hipótese) não recebe o aviso de acolhimento
+  const riskFocus = a.level === "baixo" ? null : riskFocusProfile([...final.hits, ...memory.priorLlmHits]);
 
   const { data: saved } = await admin
     .from("risk_assessments")
@@ -418,7 +421,7 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
   const totalLatency = Date.now() - t0;
   const status = degradedReason ? "degraded" : "completed";
   await Promise.all([
-    admin.from("rooms").update({ safety_level: a.level, safety_score: a.score, last_assessment_id: saved.id, analysis_pending: false }).eq("id", room.id),
+    admin.from("rooms").update({ safety_level: a.level, safety_score: a.score, last_assessment_id: saved.id, analysis_pending: false, risk_focus_profile_id: riskFocus }).eq("id", room.id),
     admin
     .from("analysis_jobs")
     .update({
@@ -458,6 +461,7 @@ async function executeJob(admin: Admin, room: RoomRow, jobId: string, req: Analy
         trend: a.trend,
         method: a.method,
         divergence: a.divergence,
+        risk_focus_profile_id: riskFocus,
         llm_trigger_reasons: triggerReasons,
         budget_reason: budgetReason,
         degraded: a.degraded,

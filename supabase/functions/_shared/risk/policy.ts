@@ -144,3 +144,24 @@ export function escalate(input: EscalationInput): EscalationDecision {
     recommendedAction: "revisao_humana_imediata_e_contencao_sugerida",
   };
 }
+
+/**
+ * Direcionamento da comunicação: aponta o perfil que concentra o peso dos sinais.
+ * Não é um veredito sobre a pessoa; é uma hipótese usada apenas para decidir a QUEM
+ * mostrar o aviso de acolhimento (nunca a quem emite os sinais).
+ * Devolve null quando não há concentração clara (nenhum sinal ou pesos parecidos).
+ */
+export function riskFocusProfile(hits: ReadonlyArray<{ senderId: string; confidence: number }>, minShare = 0.6): string | null {
+  const weight = new Map<string, number>();
+  let total = 0;
+  for (const h of hits) {
+    const w = Math.max(0, Math.min(1, h.confidence));
+    weight.set(h.senderId, (weight.get(h.senderId) ?? 0) + w);
+    total += w;
+  }
+  if (total <= 0) return null;
+  let best: string | null = null;
+  let bestW = 0;
+  for (const [id, w] of weight) if (w > bestW) { best = id; bestW = w; }
+  return best !== null && bestW / total >= minShare ? best : null;
+}

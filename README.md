@@ -49,6 +49,10 @@ Score 0 a 100 → nível `baixo | atencao | alto | critico` (limiares 25/50/75),
 
 **Memória longitudinal**: sinais apontados pela LLM em avaliações anteriores continuam valendo nas avaliações seguintes (mesmo quando a LLM não é chamada, por cooldown ou orçamento), com o mesmo decaimento das regras; e o score nunca cai mais rápido que a meia-vida entre duas avaliações. Sem isso, uma resposta inócua da vítima derrubaria o score que a LLM tinha acabado de subir.
 
+**Aviso de acolhimento direcionado**: a avaliação da sala é agnóstica ao remetente, mas a comunicação não. A cada avaliação o pipeline calcula `rooms.risk_focus_profile_id`, o perfil que concentra pelo menos 60% do peso dos sinais (regras, LLM e memória longitudinal). É uma hipótese sujeita a validação humana, registrada na auditoria, nunca um veredito. O aviso de acolhimento no chat ("você não fez nada errado, um adulto está acompanhando") aparece apenas para os demais membros da sala; quem concentra os sinais não vê nada diferente, para não denunciar o monitoramento nem antecipar uma migração de canal. Quando os pesos estão equilibrados ou não há sinais, ninguém recebe o aviso. Limitação declarada: a coluna é legível pelos membros via RLS de `rooms`; um produto real calcularia o aviso no servidor, por membro.
+
+**Contenção nunca é automática**: em crítico o motor abre caso P1 (SLA 15 min), alerta o responsável e recomenda "contenção sugerida"; pausar o envio de mensagens é sempre uma ação do moderador humano (`moderation-action`), reversível e registrada.
+
 **Gatilho de LLM** (qualquer um): regra acima do limiar de atenção; 2+ sinais distintos na janela; N novas mensagens desde a última análise; reanálise do moderador; linha do roteiro marcada. Antes da chamada: orçamento diário, limite por sala, cooldown, cache por hash e circuit breaker. Sem LLM disponível, `degraded_mode=true` e o motor determinístico decide sozinho. Resposta validada com Zod, uma tentativa de reparação, depois fallback. A LLM nunca reduz o score abaixo do das regras (postura do projeto: errar para o alerta).
 
 ## Executar localmente

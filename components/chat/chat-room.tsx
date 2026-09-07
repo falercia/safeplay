@@ -156,6 +156,8 @@ export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
     });
   }, [players, messages.rows, presence.members, presence.typing, me.id]);
   const level = room?.safety_level ?? "baixo";
+  // o aviso de acolhimento é dirigido a quem está do lado receptor dos sinais; quem os concentra não o vê
+  const showNudge = level !== "baixo" && room?.risk_focus_profile_id !== me.id;
   const online = presence.members.length;
   const disconnected = !messages.connected && !messages.loading;
   const [lite, setLite] = React.useState(false);
@@ -260,7 +262,7 @@ export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
             ) : null}
           </div>
 
-          {level !== "baixo" ? <SafetyNudge level={level} /> : null}
+          {showNudge ? <SafetyNudge level={level} /> : null}
           {room?.contained ? (
             <div className="panel flex items-start gap-3 border-warn-500/40 bg-warn-500/10 px-4 py-3 text-sm text-warn-300" role="status">
               <Lock className="mt-0.5 size-4 shrink-0" />

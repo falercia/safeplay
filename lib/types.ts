@@ -23,6 +23,8 @@ export interface RoomRow {
   contained: boolean;
   contained_reason: string | null;
   analysis_pending: boolean;
+  /** perfil que concentra os sinais (hipótese); o aviso de acolhimento nunca é mostrado a ele */
+  risk_focus_profile_id: string | null;
 }
 
 export interface MessageRow {
