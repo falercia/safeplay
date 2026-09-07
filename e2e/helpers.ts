@@ -88,3 +88,6 @@ export async function closeWorld(page: Page): Promise<void> {
   const btn = page.getByRole("button", { name: "Encerrar mundo" });
   if (await btn.isVisible().catch(() => false)) await btn.click();
 }
+
+/** Arquivo que carrega o código do mundo entre as etapas do E2E (cada etapa cabe em uma execução curta). */
+export const STATE_FILE = process.env.E2E_STATE_FILE ?? "/tmp/safe-play-e2e-world.txt";
