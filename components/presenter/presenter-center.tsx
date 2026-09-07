@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Activity, Bot, Database, LifeBuoy, LogOut, Play, RadioTower, RefreshCw, RotateCcw, Users, Wallet, WifiOff, XCircle } from "lucide-react";
+import { Activity, Bot, Database, LifeBuoy, LogOut, Play, RadioTower, RefreshCw, RotateCcw, Trash2, Users, Wallet, WifiOff, XCircle } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { RoleGate } from "@/components/role-gate";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -202,13 +202,30 @@ function PresenterInner({ data, logout, presenterCode }: { data: RoleLoginResult
   }
   async function close() {
     if (!worldCode) return;
-    if (!window.confirm("Encerrar este mundo? Os jogadores não conseguem mais entrar nele.")) return;
+    if (!window.confirm("Encerrar este mundo? Os jogadores não conseguem mais entrar nele (os dados ficam para consulta).")) return;
     const res = await call<{ ok: true }>({ action: "close_world", worldCode }, "close");
     if (res) {
       selectWorld(null);
       setStatus(null);
       void refreshWorlds();
     }
+  }
+  async function remove() {
+    if (!worldCode) return;
+    if (!window.confirm("Apagar este mundo e todos os seus dados (mensagens, avaliações, casos, auditoria)? Não dá para desfazer.")) return;
+    const res = await call<{ ok: true }>({ action: "delete_world", worldCode }, "delete");
+    if (res) {
+      selectWorld(null);
+      setStatus(null);
+      void refreshWorlds();
+    }
+  }
+  async function purgeClosed() {
+    const n = worlds.filter((w) => w.status === "closed").length;
+    if (n === 0) return;
+    if (!window.confirm(`Apagar os ${n} mundo(s) encerrado(s) e todos os seus dados? Limpa a fila de moderação. Não dá para desfazer.`)) return;
+    const res = await call<{ purged: number }>({ action: "purge_closed" }, "purge");
+    if (res) void refreshWorlds();
   }
   async function setSetting(key: "llm_disabled" | "force_llm_failure", value: boolean) {
     const res = await call<{ health: Health }>({ action: "set_setting", key, value }, "setting");
@@ -259,7 +276,10 @@ function PresenterInner({ data, logout, presenterCode }: { data: RoleLoginResult
               <div className="flex items-center gap-2">
                 <Badge>{worlds.filter((w) => w.status === "open").length} aberto(s)</Badge>
                 <button type="button" onClick={() => setShowClosed((v) => !v)} className="focus-ring chip hover:bg-white/10">
-                  {showClosed ? "ocultar encerrados" : "mostrar encerrados"}
+                  {showClosed ? "ocultar encerrados" : `mostrar encerrados (${worlds.filter((w) => w.status === "closed").length})`}
+                </button>
+                <button type="button" onClick={() => void purgeClosed()} disabled={busy !== null || worlds.every((w) => w.status !== "closed")} className="focus-ring chip text-crit-400 hover:bg-white/10 disabled:opacity-40">
+                  <Trash2 className="size-3.5" /> apagar encerrados
                 </button>
               </div>
             </div>
@@ -313,6 +333,9 @@ function PresenterInner({ data, logout, presenterCode }: { data: RoleLoginResult
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => void close()} disabled={busy !== null}>
                     <XCircle /> Encerrar mundo
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void remove()} disabled={busy !== null} className="text-crit-400">
+                    <Trash2 /> Apagar
                   </Button>
                 </div>
               </div>

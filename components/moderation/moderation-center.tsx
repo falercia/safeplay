@@ -14,7 +14,7 @@ import { TransparencyBody } from "@/components/safety/transparency";
 import { useLiveTable } from "@/lib/hooks/use-live-table";
 import { useRoomIntel } from "@/lib/hooks/use-room-intel";
 import { callFunction, ApiError } from "@/lib/api";
-import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, Level, RoleLoginResult, WorldRow } from "@/lib/types";
+import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, Level, RoleLoginResult, RoomRow, WorldRow } from "@/lib/types";
 import { ACTION_LABEL, CASE_STATUS_LABEL, formatCountdown, formatShortTime, levelClass, signalLabel } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -44,14 +44,25 @@ function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () =
   const sessionId = data.profile.session_id;
   const now = useNow();
   const cases = useLiveTable<CaseRow>({ table: "cases", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false } });
-  const worlds = useLiveTable<WorldRow>({ table: "worlds", filter: { column: "session_id", value: sessionId } });
+  const worlds = useLiveTable<WorldRow>({ table: "worlds", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false } });
+  const rooms = useLiveTable<RoomRow>({ table: "rooms", filter: { column: "session_id", value: sessionId } });
   const worldOf = React.useCallback((roomId: string) => worlds.rows.find((w) => w.room_id === roomId) ?? null, [worlds.rows]);
+  const openWorlds = worlds.rows.filter((w) => w.status === "open");
+  const [worldFilter, setWorldFilter] = React.useState<string | null>(null);
+  const [showClosed, setShowClosed] = React.useState(false);
   const [levelFilter, setLevelFilter] = React.useState<Level | "todos">("todos");
   const [statusFilter, setStatusFilter] = React.useState<"ativos" | "resolvidos" | "todos">("ativos");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
 
   const queue = React.useMemo(() => {
-    const list = cases.rows.filter((c) => (levelFilter === "todos" ? true : c.level === levelFilter)).filter((c) => (statusFilter === "todos" ? true : statusFilter === "ativos" ? ACTIVE.includes(c.status) : !ACTIVE.includes(c.status)));
+    const list = cases.rows
+      .filter((c) => (levelFilter === "todos" ? true : c.level === levelFilter))
+      .filter((c) => (statusFilter === "todos" ? true : statusFilter === "ativos" ? ACTIVE.includes(c.status) : !ACTIVE.includes(c.status)))
+      .filter((c) => {
+        const w = worldOf(c.room_id);
+        if (worldFilter) return w?.code === worldFilter;
+        return showClosed || !w || w.status === "open";
+      });
     return [...list].sort((a, b) => {
       const aa = ACTIVE.includes(a.status) ? 0 : 1;
       const bb = ACTIVE.includes(b.status) ? 0 : 1;
@@ -59,7 +70,7 @@ function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () =
       if (a.priority !== b.priority) return a.priority - b.priority;
       return new Date(a.sla_due_at).getTime() - new Date(b.sla_due_at).getTime();
     });
-  }, [cases.rows, levelFilter, statusFilter]);
+  }, [cases.rows, levelFilter, statusFilter, worldFilter, showClosed, worldOf]);
 
   React.useEffect(() => {
     if (!selectedId && queue[0]) setSelectedId(queue[0].id);
@@ -84,6 +95,52 @@ function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () =
         </>
       }
     >
+      {/* mundos ativos: o moderador vê cada mundo mesmo antes de existir um caso */}
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Mundos ativos</CardTitle>
+          <div className="flex items-center gap-2 text-xs">
+            {worldFilter ? (
+              <button type="button" className="focus-ring chip hover:bg-white/10" onClick={() => setWorldFilter(null)}>
+                ver todos os casos
+              </button>
+            ) : null}
+            <button type="button" className="focus-ring chip hover:bg-white/10" onClick={() => setShowClosed((v) => !v)}>
+              {showClosed ? "ocultar mundos encerrados" : "incluir mundos encerrados"}
+            </button>
+          </div>
+        </div>
+        <ul className="mt-3 flex flex-wrap gap-2" data-testid="moderation-worlds">
+          {openWorlds.length === 0 ? <li className="text-xs text-ink-400">Nenhum mundo aberto agora.</li> : null}
+          {openWorlds.map((w) => {
+            const room = rooms.rows.find((r) => r.id === w.room_id);
+            const active = worldFilter === w.code;
+            return (
+              <li key={w.id}>
+                <button
+                  type="button"
+                  onClick={() => setWorldFilter(active ? null : w.code)}
+                  className={cn("focus-ring flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors", active ? "border-sky-400/50 bg-white/8" : "border-white/10 hover:bg-white/5")}
+                  data-testid="moderation-world"
+                  data-code={w.code}
+                >
+                  <span className="font-semibold">{w.name}</span>
+                  <span className="font-mono text-[11px] text-ink-400">{w.code}</span>
+                  {room ? (
+                    <>
+                      <LevelBadge level={room.safety_level} size="sm" />
+                      <span className="font-display text-sm font-bold">{room.safety_score}</span>
+                      {room.analysis_pending ? <span className="animate-pulse-soft text-[11px] text-sky-400">analisando</span> : null}
+                    </>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-2 text-[11px] text-ink-400">Um caso só é aberto quando o padrão chega a Alto (ou Atenção com dois sinais distintos). Clique num mundo para filtrar a fila.</p>
+      </Card>
+
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         {/* fila */}
         <Card className="flex max-h-[calc(100dvh-9rem)] flex-col">

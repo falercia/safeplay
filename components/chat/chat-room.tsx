@@ -120,9 +120,17 @@ export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
     }
   }
 
+  // instante em que cada mensagem foi vista aqui (evita depender do relógio do servidor)
+  const seenAt = React.useRef(new Map<string, number>());
+  const primed = React.useRef(false);
   const gamePlayers: GamePlayer[] = React.useMemo(() => {
     const lastBySender = new Map<string, LocalMessage>();
-    for (const m of messages.rows) lastBySender.set(m.sender_profile_id, m);
+    const firstBatch = !primed.current; // histórico carregado não vira balão
+    if (messages.rows.length > 0) primed.current = true;
+    for (const m of messages.rows) {
+      if (!seenAt.current.has(m.id)) seenAt.current.set(m.id, firstBatch ? 0 : Date.now());
+      lastBySender.set(m.sender_profile_id, m);
+    }
     return players.slice(0, 2).map((p, i) => {
       const last = lastBySender.get(p.id);
       return {
@@ -131,7 +139,7 @@ export function WorldRoom({ me, world, room: initialRoom }: WorldRoomProps) {
         isMe: p.id === me.id,
         online: presence.members.some((mm) => mm.profileId === p.id),
         typing: presence.typing.includes(p.display_name),
-        bubble: last ? { text: last.content, at: new Date(last.created_at).getTime() } : null,
+        bubble: last ? { text: last.content, at: seenAt.current.get(last.id) ?? 0 } : null,
         slot: (i === 0 ? "A" : "B") as "A" | "B",
       };
     });

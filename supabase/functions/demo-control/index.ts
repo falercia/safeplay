@@ -14,6 +14,8 @@ const Body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("set_scenario"), worldCode: z.string(), scenario: ScenarioSchema }),
   z.object({ action: z.literal("reset_world"), worldCode: z.string() }),
   z.object({ action: z.literal("close_world"), worldCode: z.string() }),
+  z.object({ action: z.literal("delete_world"), worldCode: z.string() }),
+  z.object({ action: z.literal("purge_closed") }),
   z.object({ action: z.literal("set_setting"), key: z.enum(["llm_disabled", "force_llm_failure"]), value: z.boolean() }),
 ]);
 
@@ -45,6 +47,11 @@ Deno.serve(
       const byRoom = new Map((rooms ?? []).map((r) => [r.id as string, r]));
       return json({ ok: true, worlds: (data ?? []).map((w) => ({ ...w, room: byRoom.get(w.room_id as string) ?? null })), health: await health(admin, session) });
     }
+    if (body.action === "purge_closed") {
+      const { data: n } = await admin.rpc("admin_purge_closed_worlds");
+      await admin.from("audit_events").insert({ session_id: session.id, event_type: "worlds.purged", actor_type: "presenter", payload: { count: n ?? 0 } });
+      return json({ ok: true, purged: n ?? 0 });
+    }
     if (body.action === "set_setting") {
       const settings = { ...(session.settings ?? {}), [body.key]: body.value };
       await admin.from("demo_sessions").update({ settings }).eq("id", session.id);
@@ -60,6 +67,11 @@ Deno.serve(
         await admin.rpc("admin_reset_world", { p_world: world.id });
         await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "world.reset", actor_type: "presenter", payload: { world_code: world.code } });
         return json({ ok: true, status: await buildStatus(admin, session, await loadWorld(admin, world.code)) });
+      }
+      case "delete_world": {
+        await admin.from("audit_events").insert({ session_id: session.id, event_type: "world.deleted", actor_type: "presenter", payload: { world_code: world.code, name: world.name } });
+        await admin.rpc("admin_delete_world", { p_world: world.id });
+        return json({ ok: true });
       }
       case "close_world": {
         await admin.from("worlds").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", world.id);

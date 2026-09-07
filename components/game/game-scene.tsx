@@ -721,7 +721,8 @@ function drawHero(ctx: CanvasRenderingContext2D, h: Hero, a: Assets, W: number, 
   bar(ctx, x - bw / 2, nameY + 15, bw, 3, h.mp, "#60a5fa");
 
   // balão
-  const bubble = p?.bubble && now - p.bubble.at < 6000 ? p.bubble.text : null;
+  // balão some 4 s depois de a mensagem chegar neste navegador (relógio real, não o do rAF)
+  const bubble = p?.bubble && Date.now() - p.bubble.at < 4000 ? p.bubble.text : null;
   if (bubble || p?.typing) {
     const text = bubble ?? "…";
     ctx.font = "500 13px Inter, sans-serif";
