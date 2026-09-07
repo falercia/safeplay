@@ -1,0 +1,4 @@
+Arte do jogo (personagens, inimigos, itens, bordas de UI): Kenney (https://kenney.nl), pacotes "Toon Characters 1",
+"Platformer Art Deluxe", "Background Elements", "Fantasy UI Borders" e "UI Pack: RPG Expansion".
+Licença Creative Commons Zero (CC0 1.0): domínio público, uso livre inclusive comercial, sem exigência de atribuição.
+Cenário (céu, montanhas, chão, iluminação, partículas) desenhado em código no próprio projeto.

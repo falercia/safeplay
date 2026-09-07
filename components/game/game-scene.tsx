@@ -4,9 +4,9 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Arena Nimbus · simulação visual de um RPG cooperativo (canvas 2D, sem assets externos).
- * Não é um jogo jogável: heróis agem sozinhos contra o Guardião de Cristal. A cena é neutra e
- * NÃO reage ao risco da conversa (decisão de produto: a tensão vive nos painéis, não no jogo).
+ * Arena Nimbus · simulação visual de um RPG cooperativo (canvas 2D).
+ * Personagens, inimigos, itens e bordas: Kenney (CC0). Cenário, luz e partículas: desenhados em código.
+ * Não é jogável: os heróis agem sozinhos. A cena é neutra e NÃO reage ao risco do chat.
  */
 export interface GamePlayer {
   id: string;
@@ -14,9 +14,8 @@ export interface GamePlayer {
   isMe: boolean;
   online: boolean;
   typing: boolean;
-  /** última mensagem enviada (aparece em balão por alguns segundos) */
   bubble?: { text: string; at: number } | null;
-  /** "A" = arqueira teal, "B" = mago laranja */
+  /** A = quem criou o mundo (aventureira), B = quem entrou depois (aventureiro) */
   slot: "A" | "B";
 }
 
@@ -24,60 +23,86 @@ interface Props {
   players: GamePlayer[];
   roomName: string;
   className?: string;
-  /** reduz partículas/efeitos (mobile) */
   lite?: boolean;
 }
 
 type Vec = { x: number; y: number };
+type Pose = "idle" | "run0" | "run1" | "run2" | "attack0" | "attack1" | "attack2" | "hit" | "cheer0" | "cheer1" | "jump";
 
-interface Projectile {
-  from: Vec;
-  to: Vec;
-  t: number;
-  speed: number;
-  color: string;
-  kind: "arrow" | "bolt";
+const HERO_KEYS = { A: "femaleAdventurer", B: "maleAdventurer" } as const;
+const HERO_POSES: Pose[] = ["idle", "run0", "run1", "run2", "attack0", "attack1", "attack2", "hit", "cheer0", "cheer1", "jump"];
+const BOSS_POSES = ["idle", "attack0", "attack1", "hit", "walk0", "walk1", "fall"] as const;
+const ENEMY_SPRITES = ["bat", "bat_fly", "bat_hit", "ghost", "ghost_normal", "ghost_dead", "slimeWalk1", "slimeWalk2", "slimeDead", "fireball"] as const;
+const ITEM_SPRITES = ["gemBlue", "gemGreen", "gemRed", "gemYellow", "coinGold", "bush", "rock", "mushroomRed", "plant", "bg_tree03", "bg_tree05", "bg_tree08", "bg_tree12", "bg_tree19", "bg_tree22", "bg_tree27", "bg_tower_grey", "bg_castle_grey", "bg_temple", "bg_cloud1", "bg_cloud2", "bg_cloud3", "bg_moon_full", "bg_grass1", "bg_grass3", "bg_grass5"] as const;
+
+interface Assets {
+  heroes: Record<"A" | "B", Partial<Record<Pose, HTMLImageElement>>>;
+  boss: Partial<Record<(typeof BOSS_POSES)[number], HTMLImageElement>>;
+  enemies: Partial<Record<(typeof ENEMY_SPRITES)[number], HTMLImageElement>>;
+  items: Partial<Record<(typeof ITEM_SPRITES)[number], HTMLImageElement>>;
+  ready: boolean;
 }
-interface FloatText {
-  p: Vec;
-  text: string;
-  t: number;
-  color: string;
+
+interface Hero {
+  slot: "A" | "B";
+  x: number; // 0..1 (mundo)
+  baseY: number;
+  hp: number;
+  mp: number;
+  state: "idle" | "run" | "attack" | "hit" | "cheer";
+  stateT: number;
+  targetX: number;
+  face: 1 | -1;
+  cooldown: number;
+  anim: number;
 }
-interface Particle {
+interface Enemy {
+  kind: "bat" | "ghost" | "slime";
+  x: number;
+  y: number;
+  hp: number;
+  t: number;
+  dead: number; // >0 morrendo
+  seed: number;
+}
+interface Boss {
+  x: number;
+  hp: number;
+  phase: "idle" | "attack" | "hit" | "dying" | "gone";
+  t: number;
+  timer: number;
+}
+interface Fx {
+  kind: "text" | "ring" | "spark" | "loot";
   p: Vec;
-  v: Vec;
-  life: number;
+  v?: Vec;
+  t: number;
   max: number;
-  size: number;
+  text?: string;
   color: string;
-}
-interface Ring {
-  p: Vec;
-  t: number;
-  color: string;
+  size?: number;
+  sprite?: HTMLImageElement | undefined;
 }
 
 interface Sim {
   time: number;
-  bossHp: number;
-  bossMax: number;
-  bossPhase: "alive" | "dying" | "respawn";
-  bossTimer: number;
+  heroes: Hero[];
+  enemies: Enemy[];
+  boss: Boss;
+  fx: Fx[];
+  camera: number; // deslocamento -1..1
+  gems: number;
+  coins: number;
   kills: number;
-  projectiles: Projectile[];
-  floats: FloatText[];
-  particles: Particle[];
-  rings: Ring[];
-  heroes: { slot: "A" | "B"; x: number; y: number; hp: number; mp: number; cooldown: number; bob: number; face: number; moveT: number; targetX: number }[];
+  wave: number;
+  spawnT: number;
   skillCd: number[];
-  lootTimer: number;
-  camera: Vec;
+  banner: { text: string; t: number } | null;
 }
 
 const COLORS = {
-  A: { main: "#17c3b2", light: "#8fe8de", dark: "#0a6b62", glow: "rgba(23,195,178,0.55)" },
-  B: { main: "#f2801e", light: "#fbc38f", dark: "#8f4a0f", glow: "rgba(242,128,30,0.55)" },
+  A: { main: "#17c3b2", light: "#8fe8de", glow: "rgba(23,195,178,0.55)" },
+  B: { main: "#f2801e", light: "#fbc38f", glow: "rgba(242,128,30,0.55)" },
 };
 
 export function GameScene({ players, roomName, className, lite = false }: Props) {
@@ -85,15 +110,7 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
   const playersRef = React.useRef(players);
   playersRef.current = players;
   const [fps, setFps] = React.useState(0);
-  const [reduced, setReduced] = React.useState(false);
-
-  React.useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
-    const h = () => setReduced(mq.matches);
-    mq.addEventListener("change", h);
-    return () => mq.removeEventListener("change", h);
-  }, []);
+  const [loaded, setLoaded] = React.useState(false);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -101,25 +118,33 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
     const maybeCtx = canvas.getContext("2d");
     if (!maybeCtx) return;
     const ctx: CanvasRenderingContext2D = maybeCtx;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const assets: Assets = { heroes: { A: {}, B: {} }, boss: {}, enemies: {}, items: {}, ready: false };
+    let cancelled = false;
+    void loadAssets(assets).then(() => {
+      if (cancelled) return;
+      assets.ready = true;
+      setLoaded(true);
+    });
 
     const sim: Sim = {
       time: 0,
-      bossHp: 1,
-      bossMax: 1,
-      bossPhase: "alive",
-      bossTimer: 0,
-      kills: 0,
-      projectiles: [],
-      floats: [],
-      particles: [],
-      rings: [],
       heroes: [
-        { slot: "A", x: 0.24, y: 0.78, hp: 0.92, mp: 0.7, cooldown: 1.2, bob: 0, face: 1, moveT: 0, targetX: 0.24 },
-        { slot: "B", x: 0.4, y: 0.86, hp: 0.78, mp: 0.55, cooldown: 2.1, bob: 1.7, face: 1, moveT: 0, targetX: 0.4 },
+        { slot: "A", x: 0.22, baseY: 0.8, hp: 0.9, mp: 0.7, state: "idle", stateT: 0, targetX: 0.22, face: 1, cooldown: 1.5, anim: 0 },
+        { slot: "B", x: 0.34, baseY: 0.86, hp: 0.8, mp: 0.6, state: "idle", stateT: 0, targetX: 0.34, face: 1, cooldown: 2.5, anim: 1.3 },
       ],
+      enemies: [],
+      boss: { x: 0.78, hp: 1, phase: "idle", t: 0, timer: 4 },
+      fx: [],
+      camera: 0,
+      gems: 12,
+      coins: 340,
+      kills: 0,
+      wave: 1,
+      spawnT: 1.5,
       skillCd: [0, 0, 0, 0],
-      lootTimer: 0,
-      camera: { x: 0, y: 0 },
+      banner: { text: "Dungeon do Vulcão · Onda 1", t: 0 },
     };
 
     let W = 0;
@@ -140,7 +165,7 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
       canvas.width = Math.floor(W * dpr);
       canvas.height = Math.floor(H * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      bg = buildBackground(W, H, dpr);
+      bg = buildSky(W, H, dpr);
     };
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
@@ -166,775 +191,750 @@ export function GameScene({ players, roomName, className, lite = false }: Props)
         frames = 0;
         fpsAcc = 0;
       }
-      update(sim, dt, reduced ? 0.35 : 1, lite);
-      draw(ctx, sim, W, H, bg, playersRef.current, roomName, lite, now);
+      update(sim, dt, reduced ? 0.4 : 1, lite, assets);
+      draw(ctx, sim, W, H, bg, assets, playersRef.current, roomName, lite, now);
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
 
     return () => {
+      cancelled = true;
       running = false;
       cancelAnimationFrame(raf);
       ro.disconnect();
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [roomName, lite, reduced]);
+  }, [roomName, lite]);
 
   return (
-    <div className={cn("relative h-full w-full overflow-hidden bg-navy-950", className)} role="img" aria-label={`Simulação visual do jogo ${roomName}: dois heróis enfrentam o Guardião de Cristal. Não é interativa.`}>
+    <div className={cn("relative h-full w-full overflow-hidden bg-[#0a1230]", className)} role="img" aria-label={`Simulação visual do jogo ${roomName}. Não é interativa.`}>
       <canvas ref={canvasRef} className="block h-full w-full" />
-      <div className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-white/60">
-        {fps} fps · simulação
-      </div>
+      {!loaded ? <div className="absolute inset-0 flex items-center justify-center text-sm text-white/60">Carregando o mundo…</div> : null}
+      <div className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-white/50">{fps} fps · simulação</div>
     </div>
   );
 }
 
-/* ---------------------------------- simulação ---------------------------------- */
+/* ---------------------------------- assets ---------------------------------- */
 
-function rand(a: number, b: number): number {
-  return a + Math.random() * (b - a);
+function img(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => resolve(null);
+    i.src = src;
+  });
 }
 
-function update(sim: Sim, dt: number, motion: number, lite: boolean): void {
-  sim.time += dt;
-  const bossPos = { x: 0.74, y: 0.7 };
+async function loadAssets(a: Assets): Promise<void> {
+  const tasks: Promise<void>[] = [];
+  for (const slot of ["A", "B"] as const) {
+    for (const pose of HERO_POSES) tasks.push(img(`/game/chars/${HERO_KEYS[slot]}_${pose}.png`).then((i) => void (i && (a.heroes[slot][pose] = i))));
+  }
+  for (const pose of BOSS_POSES) tasks.push(img(`/game/chars/robot_${pose}.png`).then((i) => void (i && (a.boss[pose] = i))));
+  for (const e of ENEMY_SPRITES) tasks.push(img(`/game/enemies/${e}.png`).then((i) => void (i && (a.enemies[e] = i))));
+  for (const it of ITEM_SPRITES) tasks.push(img(`/game/items/${it}.png`).then((i) => void (i && (a.items[it] = i))));
+  await Promise.all(tasks);
+}
 
-  // heróis: bob, pequenos deslocamentos, ataques
-  for (const h of sim.heroes) {
-    h.bob += dt * 2.2 * motion;
-    h.moveT -= dt;
-    if (h.moveT <= 0) {
-      h.moveT = rand(2.5, 6);
-      h.targetX = h.slot === "A" ? rand(0.18, 0.32) : rand(0.34, 0.5);
+const tintCache = new Map<string, HTMLCanvasElement>();
+/** Cópia do sprite tingida (para profundidade/entardecer). */
+function tinted(image: HTMLImageElement, color: string, alpha: number, key: string): HTMLCanvasElement {
+  const k = `${key}:${color}:${alpha}`;
+  const hit = tintCache.get(k);
+  if (hit) return hit;
+  const c = document.createElement("canvas");
+  c.width = image.width;
+  c.height = image.height;
+  const g = c.getContext("2d");
+  if (g) {
+    g.drawImage(image, 0, 0);
+    g.globalCompositeOperation = "source-atop";
+    g.globalAlpha = alpha;
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+  }
+  tintCache.set(k, c);
+  return c;
+}
+
+/* ---------------------------------- simulação ---------------------------------- */
+
+const rand = (a: number, b: number) => a + Math.random() * (b - a);
+
+function update(sim: Sim, dt: number, motion: number, lite: boolean, assets: Assets): void {
+  sim.time += dt;
+  sim.camera = Math.sin(sim.time * 0.12) * motion;
+  if (sim.banner) {
+    sim.banner.t += dt;
+    if (sim.banner.t > 3.5) sim.banner = null;
+  }
+
+  // ondas de inimigos
+  sim.spawnT -= dt * motion;
+  const alive = sim.enemies.filter((e) => e.dead === 0).length;
+  if (sim.spawnT <= 0 && alive < (lite ? 2 : 3) && sim.boss.phase !== "dying") {
+    sim.spawnT = rand(2.5, 5);
+    const kinds: Enemy["kind"][] = ["bat", "ghost", "slime"];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)]!;
+    sim.enemies.push({ kind, x: rand(0.62, 0.9), y: kind === "slime" ? 0.86 : rand(0.45, 0.62), hp: kind === "slime" ? 3 : 2, t: 0, dead: 0, seed: Math.random() * 10 });
+  }
+  for (const e of sim.enemies) {
+    e.t += dt * motion;
+    if (e.dead > 0) {
+      e.dead += dt;
+      continue;
     }
-    h.x += (h.targetX - h.x) * Math.min(1, dt * 1.2 * motion);
-    h.mp = Math.min(1, h.mp + dt * 0.03);
-    h.hp = Math.min(1, h.hp + dt * 0.01);
+    if (e.kind === "slime") e.x -= dt * 0.012 * motion;
+    else {
+      e.x -= dt * 0.006 * motion;
+      e.y += Math.sin(e.t * 2 + e.seed) * dt * 0.02;
+    }
+    if (e.x < 0.42) e.x = 0.42;
+  }
+  sim.enemies = sim.enemies.filter((e) => e.dead < 0.9);
+
+  // heróis
+  for (const h of sim.heroes) {
+    h.anim += dt * motion;
+    h.stateT += dt;
     h.cooldown -= dt * motion;
-    if (h.cooldown <= 0 && sim.bossPhase === "alive") {
-      h.cooldown = h.slot === "A" ? rand(1.1, 1.9) : rand(1.8, 2.8);
-      if (h.slot === "B" && h.mp < 0.15) h.cooldown = 1;
-      else {
-        if (h.slot === "B") h.mp -= 0.12;
-        sim.projectiles.push({
-          from: { x: h.x + 0.02, y: h.y - 0.1 },
-          to: { x: bossPos.x + rand(-0.03, 0.03), y: bossPos.y - rand(0.05, 0.2) },
-          t: 0,
-          speed: h.slot === "A" ? 2.6 : 1.6,
-          color: COLORS[h.slot].light,
-          kind: h.slot === "A" ? "arrow" : "bolt",
-        });
+    h.mp = Math.min(1, h.mp + dt * 0.02);
+    h.hp = Math.min(1, h.hp + dt * 0.008);
+    if (h.state === "attack" && h.stateT > 0.55) h.state = "idle";
+    if (h.state === "hit" && h.stateT > 0.4) h.state = "idle";
+    if (h.state === "cheer" && h.stateT > 1.6) h.state = "idle";
+    if (h.state === "run") {
+      const dir = Math.sign(h.targetX - h.x) as 1 | -1 | 0;
+      if (dir !== 0) h.face = dir;
+      h.x += dir * dt * 0.08 * motion;
+      if (Math.abs(h.targetX - h.x) < 0.01) {
+        h.x = h.targetX;
+        h.state = "idle";
+        h.stateT = 0;
       }
     }
-  }
-
-  // boss: ataque ocasional (dano leve nos heróis), morte e respawn
-  sim.bossTimer -= dt * motion;
-  if (sim.bossPhase === "alive" && sim.bossTimer <= 0) {
-    sim.bossTimer = rand(3, 5);
-    const target = sim.heroes[Math.floor(Math.random() * sim.heroes.length)]!;
-    target.hp = Math.max(0.35, target.hp - rand(0.08, 0.18));
-    sim.rings.push({ p: { x: target.x, y: target.y - 0.05 }, t: 0, color: "rgba(229,72,77,0.8)" });
-    sim.floats.push({ p: { x: target.x, y: target.y - 0.2 }, text: `-${Math.round(rand(80, 220))}`, t: 0, color: "#f0666a" });
-    spawnParticles(sim, { x: bossPos.x - 0.06, y: bossPos.y - 0.2 }, 10, "#c084fc", lite);
-  }
-  if (sim.bossPhase === "dying") {
-    sim.bossTimer -= dt;
-    if (Math.random() < 0.5) spawnParticles(sim, { x: bossPos.x + rand(-0.08, 0.08), y: bossPos.y - rand(0, 0.3) }, 3, "#e9d5ff", lite);
-    if (sim.bossTimer <= 0) {
-      sim.bossPhase = "respawn";
-      sim.bossTimer = 4;
-      sim.kills++;
-      sim.lootTimer = 3.5;
-      for (let i = 0; i < 3; i++) sim.floats.push({ p: { x: bossPos.x + rand(-0.1, 0.1), y: bossPos.y - rand(0.1, 0.3) }, text: ["+ Espada de Gelo", "+ 320 xp", "+ Poção"][i]!, t: -i * 0.4, color: "#fde68a" });
-    }
-  } else if (sim.bossPhase === "respawn") {
-    if (sim.bossTimer <= 0) {
-      sim.bossPhase = "alive";
-      sim.bossHp = 1;
-      sim.bossTimer = 3;
-      sim.rings.push({ p: { x: bossPos.x, y: bossPos.y - 0.15 }, t: 0, color: "rgba(192,132,252,0.9)" });
-    }
-  }
-
-  // projéteis
-  for (const p of sim.projectiles) {
-    p.t += dt * p.speed * motion;
-    if (p.t >= 1) {
-      if (sim.bossPhase === "alive") {
-        const dmg = p.kind === "arrow" ? rand(0.03, 0.05) : rand(0.06, 0.1);
-        sim.bossHp = Math.max(0, sim.bossHp - dmg);
-        sim.floats.push({ p: { x: p.to.x, y: p.to.y - 0.04 }, text: `${Math.round(dmg * 4200)}`, t: 0, color: p.color });
-        sim.rings.push({ p: { ...p.to }, t: 0, color: p.color });
-        spawnParticles(sim, p.to, p.kind === "arrow" ? 5 : 9, p.color, lite);
-        if (sim.bossHp <= 0) {
-          sim.bossPhase = "dying";
-          sim.bossTimer = 1.6;
+    if (h.state === "idle" && h.cooldown <= 0) {
+      // escolhe alvo: inimigo vivo mais próximo ou o chefe
+      const target = sim.enemies.filter((e) => e.dead === 0).sort((p, q) => Math.abs(p.x - h.x) - Math.abs(q.x - h.x))[0];
+      const bossAlive = sim.boss.phase !== "dying" && sim.boss.phase !== "gone";
+      if (target || bossAlive) {
+        const tx = target ? target.x - (h.slot === "A" ? 0.06 : 0.09) : sim.boss.x - (h.slot === "A" ? 0.12 : 0.16);
+        if (Math.abs(tx - h.x) > 0.03 && Math.random() < 0.7) {
+          h.targetX = Math.max(0.12, Math.min(0.66, tx));
+          h.state = "run";
+          h.stateT = 0;
+          h.cooldown = 0.2;
+        } else {
+          h.state = "attack";
+          h.stateT = 0;
+          h.face = 1;
+          h.cooldown = h.slot === "A" ? rand(1.2, 2) : rand(1.6, 2.6);
+          if (h.slot === "B") h.mp = Math.max(0, h.mp - 0.15);
+          // aplica dano após um pequeno atraso (no meio da animação)
+          const dmg = h.slot === "A" ? rand(60, 120) : rand(90, 180);
+          const color = COLORS[h.slot].light;
+          sim.fx.push({ kind: "spark", p: { x: h.x + 0.05 * h.face, y: h.baseY - 0.16 }, t: -0.25, max: 0.5, color });
+          if (target && Math.abs(target.x - h.x) < 0.14) {
+            target.hp -= 1;
+            sim.fx.push({ kind: "text", p: { x: target.x, y: target.y - 0.06 }, t: -0.25, max: 1.2, text: `${Math.round(dmg)}`, color });
+            if (target.hp <= 0) {
+              target.dead = 0.01;
+              sim.kills++;
+              sim.fx.push({ kind: "loot", p: { x: target.x, y: target.y }, v: { x: rand(-0.05, 0.05), y: -0.25 }, t: 0, max: 1.4, color, sprite: Math.random() < 0.5 ? assets.items.coinGold : assets.items.gemBlue });
+              if (Math.random() < 0.5) sim.coins += 15;
+              else sim.gems += 1;
+              if (sim.kills % 6 === 0) {
+                sim.wave++;
+                sim.banner = { text: `Onda ${sim.wave} · continuem juntos`, t: 0 };
+                for (const hh of sim.heroes) {
+                  hh.state = "cheer";
+                  hh.stateT = 0;
+                }
+              }
+            }
+          } else if (bossAlive && Math.abs(sim.boss.x - h.x) < 0.22) {
+            const d = h.slot === "A" ? 0.035 : 0.055;
+            sim.boss.hp = Math.max(0, sim.boss.hp - d);
+            sim.boss.phase = "hit";
+            sim.boss.t = 0;
+            sim.fx.push({ kind: "text", p: { x: sim.boss.x - 0.02, y: 0.52 }, t: -0.25, max: 1.2, text: `${Math.round(dmg * 1.6)}`, color });
+            sim.fx.push({ kind: "ring", p: { x: sim.boss.x, y: 0.72 }, t: 0, max: 0.6, color });
+            if (sim.boss.hp <= 0) {
+              sim.boss.phase = "dying";
+              sim.boss.t = 0;
+              sim.banner = { text: "Sentinela derrotada! Tesouro liberado", t: 0 };
+              for (let i = 0; i < 6; i++) sim.fx.push({ kind: "loot", p: { x: sim.boss.x + rand(-0.05, 0.05), y: 0.6 }, v: { x: rand(-0.12, 0.12), y: rand(-0.35, -0.15) }, t: 0, max: 1.6, color: "#fde68a", sprite: [assets.items.gemRed, assets.items.gemYellow, assets.items.gemGreen, assets.items.coinGold][i % 4] });
+              sim.gems += 5;
+              sim.coins += 120;
+              for (const hh of sim.heroes) {
+                hh.state = "cheer";
+                hh.stateT = 0;
+              }
+            }
+          }
         }
       }
     }
   }
-  sim.projectiles = sim.projectiles.filter((p) => p.t < 1);
 
-  // textos flutuantes, anéis, partículas
-  for (const f of sim.floats) f.t += dt;
-  sim.floats = sim.floats.filter((f) => f.t < 1.4);
-  for (const r of sim.rings) r.t += dt * 1.8;
-  sim.rings = sim.rings.filter((r) => r.t < 1);
-  for (const q of sim.particles) {
-    q.life += dt;
-    q.p.x += q.v.x * dt;
-    q.p.y += q.v.y * dt;
-    q.v.y += 0.12 * dt;
+  // chefe
+  const b = sim.boss;
+  b.t += dt * motion;
+  b.timer -= dt * motion;
+  if (b.phase === "hit" && b.t > 0.35) b.phase = "idle";
+  if (b.phase === "attack" && b.t > 0.7) b.phase = "idle";
+  if (b.phase === "idle" && b.timer <= 0) {
+    b.timer = rand(4, 7);
+    b.phase = "attack";
+    b.t = 0;
+    const target = sim.heroes[Math.floor(Math.random() * sim.heroes.length)]!;
+    target.hp = Math.max(0.3, target.hp - rand(0.08, 0.16));
+    target.state = "hit";
+    target.stateT = 0;
+    sim.fx.push({ kind: "text", p: { x: target.x, y: target.baseY - 0.3 }, t: 0.2, max: 1.2, text: `-${Math.round(rand(70, 160))}`, color: "#f87171" });
+    sim.fx.push({ kind: "spark", p: { x: target.x, y: target.baseY - 0.15 }, t: 0.2, max: 0.5, color: "#fca5a5" });
   }
-  sim.particles = sim.particles.filter((q) => q.life < q.max);
-  // vagalumes ambientes
-  if (!lite && sim.particles.length < 70 && Math.random() < 0.3) {
-    sim.particles.push({ p: { x: Math.random(), y: rand(0.35, 0.95) }, v: { x: rand(-0.02, 0.02), y: rand(-0.03, -0.005) }, life: 0, max: rand(3, 6), size: rand(1, 2.2), color: Math.random() < 0.5 ? "#8fe8de" : "#fbc38f" });
+  if (b.phase === "dying" && b.t > 2.2) {
+    b.phase = "gone";
+    b.timer = 6;
+  }
+  if (b.phase === "gone" && b.timer <= 0) {
+    b.phase = "idle";
+    b.hp = 1;
+    b.timer = 5;
+    sim.banner = { text: "Uma nova Sentinela se aproxima", t: 0 };
   }
 
-  // cooldowns da barra de habilidades (decorativos)
-  sim.skillCd = sim.skillCd.map((c, i) => (c <= 0 ? (Math.random() < 0.004 ? [4, 7, 12, 20][i]! : 0) : c - dt));
-  sim.lootTimer = Math.max(0, sim.lootTimer - dt);
-  sim.camera.x = Math.sin(sim.time * 0.25) * 0.004 * motion;
-  sim.camera.y = Math.cos(sim.time * 0.31) * 0.003 * motion;
-}
-
-function spawnParticles(sim: Sim, at: Vec, n: number, color: string, lite: boolean): void {
-  const count = lite ? Math.ceil(n / 2) : n;
-  for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const s = rand(0.04, 0.16);
-    sim.particles.push({ p: { ...at }, v: { x: Math.cos(a) * s, y: Math.sin(a) * s - 0.05 }, life: 0, max: rand(0.5, 1.1), size: rand(1.5, 3.5), color });
+  // efeitos
+  for (const f of sim.fx) {
+    f.t += dt;
+    if (f.kind === "loot" && f.v) {
+      f.p.x += f.v.x * dt;
+      f.p.y += f.v.y * dt;
+      f.v.y += 0.6 * dt;
+      if (f.p.y > 0.9) {
+        f.p.y = 0.9;
+        f.v.y *= -0.35;
+      }
+    }
   }
+  sim.fx = sim.fx.filter((f) => f.t < f.max);
+  sim.skillCd = sim.skillCd.map((c, i) => (c <= 0 ? (Math.random() < 0.003 ? [4, 7, 12, 20][i]! : 0) : c - dt));
 }
 
 /* ---------------------------------- desenho ---------------------------------- */
 
-function sceneScale(W: number, H: number): number {
-  return Math.max(0.5, Math.min(1, Math.min(W, H * 1.5) / 1150));
-}
-
-function buildBackground(W: number, H: number, dpr: number): HTMLCanvasElement {
+function buildSky(W: number, H: number, dpr: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = Math.floor(W * dpr);
   c.height = Math.floor(H * dpr);
   const g = c.getContext("2d");
   if (!g) return c;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // céu de entardecer
   const sky = g.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, "#050f26");
-  sky.addColorStop(0.45, "#0d2657");
-  sky.addColorStop(0.72, "#3b2a5e");
-  sky.addColorStop(1, "#7a3a2a");
+  sky.addColorStop(0, "#070f2b");
+  sky.addColorStop(0.4, "#132a63");
+  sky.addColorStop(0.68, "#4a3170");
+  sky.addColorStop(0.82, "#9a4a3a");
+  sky.addColorStop(1, "#c46a3a");
   g.fillStyle = sky;
   g.fillRect(0, 0, W, H);
-
-  // estrelas
-  for (let i = 0; i < 140; i++) {
-    const x = Math.random() * W;
-    const y = Math.random() * H * 0.55;
-    const r = Math.random() * 1.3 + 0.2;
-    g.fillStyle = `rgba(255,255,255,${rand(0.25, 0.9)})`;
+  for (let i = 0; i < 160; i++) {
+    g.fillStyle = `rgba(255,255,255,${rand(0.2, 0.9)})`;
     g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
+    g.arc(Math.random() * W, Math.random() * H * 0.55, Math.random() * 1.4 + 0.2, 0, Math.PI * 2);
     g.fill();
   }
-
-  // lua
-  const mx = W * 0.82;
-  const my = H * 0.18;
-  const moon = g.createRadialGradient(mx, my, 0, mx, my, H * 0.16);
-  moon.addColorStop(0, "rgba(255,244,214,0.95)");
-  moon.addColorStop(0.25, "rgba(255,236,190,0.35)");
-  moon.addColorStop(1, "rgba(255,236,190,0)");
-  g.fillStyle = moon;
-  g.fillRect(0, 0, W, H);
-
-  // montanhas em camadas (paralaxe estática)
-  const layers = [
-    { y: 0.5, amp: 0.12, color: "#0b1d45", seed: 1 },
-    { y: 0.58, amp: 0.1, color: "#122a5c", seed: 7 },
-    { y: 0.66, amp: 0.07, color: "#1c3a72", seed: 13 },
-  ];
-  for (const L of layers) {
-    g.fillStyle = L.color;
-    g.beginPath();
-    g.moveTo(0, H);
-    for (let x = 0; x <= W; x += 6) {
-      const t = x / W;
-      const y = H * (L.y - Math.abs(Math.sin(t * 5.3 + L.seed)) * L.amp - Math.abs(Math.sin(t * 13.1 + L.seed * 2)) * L.amp * 0.35);
-      g.lineTo(x, y);
-    }
-    g.lineTo(W, H);
-    g.closePath();
-    g.fill();
-  }
-
-  // silhueta de castelo distante
-  g.fillStyle = "#0f2350";
-  const cx = W * 0.55;
-  const cy = H * 0.6;
-  g.fillRect(cx - 40, cy - 60, 80, 60);
-  g.fillRect(cx - 55, cy - 90, 18, 90);
-  g.fillRect(cx + 37, cy - 100, 18, 100);
-  g.fillRect(cx - 8, cy - 120, 16, 120);
-  for (let i = -55; i < 55; i += 12) g.fillRect(cx + i, cy - 130, 6, 10);
-  // brilho do horizonte
-  const hz = g.createLinearGradient(0, H * 0.55, 0, H * 0.7);
-  hz.addColorStop(0, "rgba(255,150,90,0)");
-  hz.addColorStop(1, "rgba(255,150,90,0.18)");
-  g.fillStyle = hz;
-  g.fillRect(0, H * 0.55, W, H * 0.15);
-
-  // chão da arena
-  const ground = g.createLinearGradient(0, H * 0.68, 0, H);
-  ground.addColorStop(0, "#23305a");
-  ground.addColorStop(1, "#0b1330");
-  g.fillStyle = ground;
-  g.fillRect(0, H * 0.68, W, H * 0.32);
-  // pedras/linhas do chão
-  g.strokeStyle = "rgba(143,232,222,0.08)";
-  g.lineWidth = 1;
-  for (let i = 0; i < 9; i++) {
-    const y = H * (0.7 + i * 0.035);
-    g.beginPath();
-    g.moveTo(0, y);
-    g.lineTo(W, y + Math.sin(i) * 4);
-    g.stroke();
-  }
-  // círculo rúnico
-  g.strokeStyle = "rgba(192,132,252,0.35)";
-  g.lineWidth = 2;
-  g.beginPath();
-  g.ellipse(W * 0.74, H * 0.74, W * 0.13, H * 0.05, 0, 0, Math.PI * 2);
-  g.stroke();
-  g.strokeStyle = "rgba(192,132,252,0.18)";
-  g.beginPath();
-  g.ellipse(W * 0.74, H * 0.74, W * 0.17, H * 0.068, 0, 0, Math.PI * 2);
-  g.stroke();
-  // névoa
-  const fog = g.createLinearGradient(0, H * 0.62, 0, H * 0.78);
-  fog.addColorStop(0, "rgba(120,140,200,0)");
-  fog.addColorStop(0.5, "rgba(120,140,200,0.14)");
-  fog.addColorStop(1, "rgba(120,140,200,0)");
-  g.fillStyle = fog;
-  g.fillRect(0, H * 0.6, W, H * 0.2);
   return c;
 }
 
-function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg: HTMLCanvasElement | null, players: GamePlayer[], roomName: string, lite: boolean, now: number): void {
+function draw(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, bg: HTMLCanvasElement | null, a: Assets, players: GamePlayer[], roomName: string, lite: boolean, now: number): void {
   ctx.clearRect(0, 0, W, H);
-  ctx.save();
-  ctx.translate(sim.camera.x * W, sim.camera.y * H);
   if (bg) ctx.drawImage(bg, 0, 0, W, H);
+  const cam = sim.camera; // -1..1
+  const horizon = H * 0.72;
+  const s = Math.max(0.45, Math.min(1, Math.min(W / 1200, H / 720)));
 
-  // tochas
-  drawTorch(ctx, W * 0.07, H * 0.6, sim.time, H);
-  drawTorch(ctx, W * 0.95, H * 0.6, sim.time + 1.3, H);
-
-  // boss
-  drawBoss(ctx, sim, W, H);
-
-  // heróis (ordenados por y)
-  const byName = new Map(players.map((p) => [p.slot, p]));
-  const heroes = [...sim.heroes].sort((a, b) => a.y - b.y);
-  for (const h of heroes) {
-    const p = byName.get(h.slot);
-    drawHero(ctx, h, W, H, p, now);
-  }
-
-  // projéteis
-  for (const p of sim.projectiles) {
-    const x = (p.from.x + (p.to.x - p.from.x) * p.t) * W;
-    const arc = Math.sin(p.t * Math.PI) * H * (p.kind === "arrow" ? 0.06 : 0.02);
-    const y = (p.from.y + (p.to.y - p.from.y) * p.t) * H - arc;
-    ctx.save();
-    ctx.shadowColor = p.color;
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = p.color;
-    if (p.kind === "arrow") {
-      const ang = Math.atan2((p.to.y - p.from.y) * H, (p.to.x - p.from.x) * W) - Math.cos(p.t * Math.PI) * 0.4;
-      ctx.translate(x, y);
-      ctx.rotate(ang);
-      ctx.fillRect(-14, -1.2, 28, 2.4);
-      ctx.beginPath();
-      ctx.moveTo(14, 0);
-      ctx.lineTo(8, -4);
-      ctx.lineTo(8, 4);
-      ctx.closePath();
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.arc(x, y, 6 + Math.sin(sim.time * 20) * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  // anéis de impacto
-  for (const r of sim.rings) {
-    ctx.strokeStyle = r.color;
-    ctx.globalAlpha = 1 - r.t;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(r.p.x * W, r.p.y * H, 8 + r.t * 40, 4 + r.t * 16, 0, 0, Math.PI * 2);
-    ctx.stroke();
+  // lua e nuvens (camada mais distante)
+  if (a.items.bg_moon_full) {
+    const m = a.items.bg_moon_full;
+    const mw = 90 * s;
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(m, W * 0.8 - cam * W * 0.01, H * 0.12, mw, mw);
+    const glow = ctx.createRadialGradient(W * 0.8 + mw / 2, H * 0.12 + mw / 2, mw * 0.4, W * 0.8 + mw / 2, H * 0.12 + mw / 2, mw * 2.2);
+    glow.addColorStop(0, "rgba(255,240,200,0.25)");
+    glow.addColorStop(1, "rgba(255,240,200,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H * 0.6);
     ctx.globalAlpha = 1;
   }
-
-  // partículas
-  for (const q of sim.particles) {
-    const a = 1 - q.life / q.max;
-    ctx.globalAlpha = a * 0.9;
-    ctx.fillStyle = q.color;
-    ctx.beginPath();
-    ctx.arc(q.p.x * W, q.p.y * H, q.size, 0, Math.PI * 2);
-    ctx.fill();
+  const clouds = [a.items.bg_cloud1, a.items.bg_cloud2, a.items.bg_cloud3];
+  for (let i = 0; i < 5; i++) {
+    const c = clouds[i % 3];
+    if (!c) continue;
+    const speed = 0.004 + i * 0.002;
+    const x = (((i * 0.23 + sim.time * speed) % 1.3) - 0.15) * W - cam * W * 0.02 * (i + 1);
+    const y = H * (0.12 + i * 0.07);
+    const w = (160 + i * 40) * s;
+    ctx.globalAlpha = 0.18 + i * 0.03;
+    ctx.drawImage(tinted(c, "#1a2a5a", 0.85, `cloud${i % 3}`), x, y, w, w * (c.height / c.width));
   }
   ctx.globalAlpha = 1;
 
-  // textos flutuantes
-  for (const f of sim.floats) {
-    if (f.t < 0) continue;
-    const a = 1 - f.t / 1.4;
-    ctx.globalAlpha = a;
-    ctx.font = `700 ${f.text.startsWith("+") ? 13 : 15}px Sora, Inter, sans-serif`;
-    ctx.fillStyle = f.color;
-    ctx.strokeStyle = "rgba(0,0,0,0.6)";
-    ctx.lineWidth = 3;
-    const x = f.p.x * W;
-    const y = f.p.y * H - f.t * 40;
-    ctx.strokeText(f.text, x, y);
-    ctx.fillText(f.text, x, y);
+  // montanhas (procedurais)
+  drawMountains(ctx, W, H, horizon, cam);
+
+  // castelo e templo distantes
+  drawBackSprite(ctx, a.items.bg_castle_grey, "#1c2a55", 0.9, W * 0.62 - cam * W * 0.03, horizon - 150 * s, 190 * s, "castle");
+  drawBackSprite(ctx, a.items.bg_tower_grey, "#1c2a55", 0.9, W * 0.88 - cam * W * 0.03, horizon - 165 * s, 60 * s, "tower");
+  drawBackSprite(ctx, a.items.bg_temple, "#1c2a55", 0.9, W * 0.1 - cam * W * 0.03, horizon - 110 * s, 220 * s, "temple");
+
+  // linha de árvores distante (tingida) e próxima
+  const treesFar = [a.items.bg_tree03, a.items.bg_tree08, a.items.bg_tree12, a.items.bg_tree19, a.items.bg_tree22];
+  for (let i = 0; i < 14; i++) {
+    const t = treesFar[i % treesFar.length];
+    if (!t) continue;
+    const x = ((i * 0.083 + 0.02) % 1) * W - cam * W * 0.05;
+    const h = (90 + (i % 3) * 30) * s;
+    drawBackSprite(ctx, t, "#16244d", 0.8, x, horizon - h + 6, h * (t.width / t.height), `tf${i % 5}`);
+  }
+  // chão
+  const ground = ctx.createLinearGradient(0, horizon, 0, H);
+  ground.addColorStop(0, "#3b5a3a");
+  ground.addColorStop(0.15, "#2e4a32");
+  ground.addColorStop(1, "#14231f");
+  ctx.fillStyle = ground;
+  ctx.fillRect(0, horizon, W, H - horizon);
+  // faixa de luz quente do horizonte
+  const rim = ctx.createLinearGradient(0, horizon - 6, 0, horizon + 18);
+  rim.addColorStop(0, "rgba(255,180,120,0.35)");
+  rim.addColorStop(1, "rgba(255,180,120,0)");
+  ctx.fillStyle = rim;
+  ctx.fillRect(0, horizon - 6, W, 24);
+  // caminho de pedra
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.beginPath();
+  ctx.ellipse(W * 0.55, H * 0.9, W * 0.5, H * 0.09, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // vegetação próxima (paralaxe maior)
+  const near = [a.items.bg_tree05, a.items.bg_tree27, a.items.bush, a.items.rock, a.items.mushroomRed, a.items.plant, a.items.bg_grass1, a.items.bg_grass3, a.items.bg_grass5];
+  const nearSpec: [number, number, number, number][] = [
+    [0.02, 0, 150, 0.995],
+    [0.95, 1, 170, 0.995],
+    [0.1, 2, 44, 0.9],
+    [0.5, 3, 40, 0.88],
+    [0.63, 4, 28, 0.92],
+    [0.3, 5, 34, 0.91],
+    [0.18, 6, 30, 0.95],
+    [0.72, 7, 30, 0.95],
+    [0.86, 8, 30, 0.95],
+    [0.42, 6, 26, 0.99],
+  ];
+  for (const [nx, idx, size, ny] of nearSpec) {
+    const im = near[idx];
+    if (!im) continue;
+    const w = size * s * (im.width / im.height);
+    const h = size * s;
+    const x = nx * W - cam * W * 0.09 - w / 2;
+    const y = H * ny - h;
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(tinted(im, "#0c1a2a", 0.35, `near${idx}`), x, y, w, h);
     ctx.globalAlpha = 1;
   }
-  ctx.restore();
 
-  drawHud(ctx, sim, W, H, players, roomName, lite);
+  // tochas
+  drawTorch(ctx, W * 0.06 - cam * W * 0.09, horizon + 10, sim.time, s);
+  drawTorch(ctx, W * 0.94 - cam * W * 0.09, horizon + 10, sim.time + 1.7, s);
+
+  // entidades ordenadas por profundidade (y)
+  type Drawable = { y: number; fn: () => void };
+  const list: Drawable[] = [];
+  for (const e of sim.enemies) list.push({ y: e.kind === "slime" ? e.y : e.y + 0.2, fn: () => drawEnemy(ctx, e, a, W, H, s, cam, sim.time) });
+  list.push({ y: 0.86, fn: () => drawBoss(ctx, sim, a, W, H, s, cam) });
+  for (const h of sim.heroes) {
+    const p = players.find((pp) => pp.slot === h.slot);
+    list.push({ y: h.baseY, fn: () => drawHero(ctx, h, a, W, H, s, cam, p, now) });
+  }
+  list.sort((p, q) => p.y - q.y).forEach((d) => d.fn());
+
+  // efeitos
+  for (const f of sim.fx) {
+    if (f.t < 0) continue;
+    const x = f.p.x * W - cam * W * 0.09;
+    const y = f.p.y * H;
+    const life = f.t / f.max;
+    if (f.kind === "text") {
+      ctx.globalAlpha = 1 - life;
+      ctx.font = `800 ${(f.text?.startsWith("-") ? 15 : 17) * s + 4}px Sora, Inter, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.65)";
+      ctx.fillStyle = f.color;
+      ctx.strokeText(f.text ?? "", x, y - life * 50);
+      ctx.fillText(f.text ?? "", x, y - life * 50);
+      ctx.textAlign = "left";
+    } else if (f.kind === "ring") {
+      ctx.globalAlpha = 1 - life;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 10 + life * 90 * s, 4 + life * 30 * s, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (f.kind === "spark") {
+      ctx.globalAlpha = 1 - life;
+      for (let i = 0; i < (lite ? 4 : 7); i++) {
+        const ang = (i / 7) * Math.PI * 2 + f.t * 3;
+        const r = life * 40 * s;
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(ang) * r, y + Math.sin(ang) * r * 0.6, 3 * s * (1 - life) + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (f.kind === "loot" && f.sprite) {
+      ctx.globalAlpha = life > 0.75 ? (1 - life) * 4 : 1;
+      const sz = 28 * s;
+      ctx.drawImage(f.sprite, x - sz / 2, y - sz, sz, sz);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // luz ambiente e vinheta
+  const vig = ctx.createRadialGradient(W / 2, H * 0.55, H * 0.35, W / 2, H * 0.55, H * 0.95);
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(3,8,24,0.55)");
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  drawHud(ctx, sim, a, W, H, s, players, roomName, lite);
 }
 
-function drawTorch(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, H: number): void {
+function drawMountains(ctx: CanvasRenderingContext2D, W: number, H: number, horizon: number, cam: number): void {
+  const layers = [
+    { amp: 0.16, color: "#0f1f4a", speed: 0.01, seed: 1.3 },
+    { amp: 0.12, color: "#16295a", speed: 0.02, seed: 4.1 },
+    { amp: 0.08, color: "#213768", speed: 0.03, seed: 7.7 },
+  ];
+  for (const L of layers) {
+    ctx.fillStyle = L.color;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 6) {
+      const t = (x + cam * W * L.speed) / W;
+      const y = horizon - Math.abs(Math.sin(t * 4.2 + L.seed)) * H * L.amp - Math.abs(Math.sin(t * 11 + L.seed * 2)) * H * L.amp * 0.3 + 4;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // neblina baixa
+  const fog = ctx.createLinearGradient(0, horizon - 40, 0, horizon + 10);
+  fog.addColorStop(0, "rgba(140,160,220,0)");
+  fog.addColorStop(1, "rgba(140,160,220,0.18)");
+  ctx.fillStyle = fog;
+  ctx.fillRect(0, horizon - 40, W, 50);
+}
+
+function drawBackSprite(ctx: CanvasRenderingContext2D, im: HTMLImageElement | undefined, color: string, alpha: number, x: number, y: number, w: number, key: string): void {
+  if (!im) return;
+  const h = w * (im.height / im.width);
+  ctx.drawImage(tinted(im, color, alpha, key), x - w / 2, y, w, h);
+}
+
+function drawTorch(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, s: number): void {
   const flicker = 0.85 + Math.sin(t * 9) * 0.08 + Math.sin(t * 23) * 0.05;
-  const r = H * 0.16 * flicker;
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, "rgba(255,170,60,0.35)");
+  const r = 130 * s * flicker;
+  const g = ctx.createRadialGradient(x, y - 40 * s, 0, x, y - 40 * s, r);
+  g.addColorStop(0, "rgba(255,170,60,0.32)");
   g.addColorStop(1, "rgba(255,120,30,0)");
   ctx.fillStyle = g;
-  ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  ctx.fillRect(x - r, y - 40 * s - r, r * 2, r * 2);
   ctx.fillStyle = "#3b2a1a";
-  ctx.fillRect(x - 3, y, 6, H * 0.14);
+  ctx.fillRect(x - 3 * s, y - 40 * s, 6 * s, 60 * s);
   ctx.fillStyle = "#ffb347";
   ctx.beginPath();
-  ctx.ellipse(x, y - 4, 6, 10 * flicker, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y - 46 * s, 7 * s, 12 * s * flicker, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#fff3c4";
   ctx.beginPath();
-  ctx.ellipse(x, y - 2, 3, 5 * flicker, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y - 44 * s, 3.5 * s, 6 * s * flicker, 0, 0, Math.PI * 2);
   ctx.fill();
 }
 
-function drawBoss(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number): void {
-  const bx = W * 0.74;
-  const by = H * 0.7;
-  const breathe = 1 + Math.sin(sim.time * 1.4) * 0.025;
-  const scale = sceneScale(W, H) * 1.15;
-  const dying = sim.bossPhase === "dying";
-  const gone = sim.bossPhase === "respawn";
-  const alpha = dying ? Math.max(0, sim.bossTimer / 1.6) : gone ? Math.max(0, 1 - sim.bossTimer / 4) * 0.9 : 1;
-  const hover = Math.sin(sim.time * 1.1) * 6;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(bx, by);
-  ctx.scale(scale, scale);
-
-  // aura no chão
-  const aura = ctx.createRadialGradient(0, 10, 10, 0, 10, 170);
-  aura.addColorStop(0, "rgba(192,132,252,0.32)");
-  aura.addColorStop(1, "rgba(192,132,252,0)");
-  ctx.fillStyle = aura;
-  ctx.fillRect(-180, -140, 360, 200);
-  ctx.fillStyle = "rgba(0,0,0,0.4)";
-  ctx.beginPath();
-  ctx.ellipse(0, 14, 96, 16, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.translate(0, hover);
-  ctx.scale(breathe, breathe);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(233,213,255,0.65)";
-
-  // pernas de cristal
-  const leg = ctx.createLinearGradient(0, -60, 0, 10);
-  leg.addColorStop(0, "#6d28d9");
-  leg.addColorStop(1, "#1e1b4b");
-  ctx.fillStyle = leg;
-  poly(ctx, [[-52, -70], [-24, -70], [-30, 0], [-62, 6]]);
-  poly(ctx, [[24, -70], [52, -70], [62, 6], [30, 0]]);
-
-  // torso
-  const body = ctx.createLinearGradient(-70, -190, 70, -60);
-  body.addColorStop(0, "#c4b5fd");
-  body.addColorStop(0.45, "#7c3aed");
-  body.addColorStop(1, "#312e81");
-  ctx.fillStyle = body;
-  poly(ctx, [[-60, -70], [-78, -150], [-50, -205], [50, -205], [78, -150], [60, -70]]);
-  // facetas internas
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.beginPath();
-  ctx.moveTo(-50, -205); ctx.lineTo(0, -130); ctx.lineTo(50, -205);
-  ctx.moveTo(-78, -150); ctx.lineTo(0, -130); ctx.lineTo(78, -150);
-  ctx.moveTo(0, -130); ctx.lineTo(0, -70);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(233,213,255,0.65)";
-
-  // ombreiras e braços
-  const armSwing = Math.sin(sim.time * 1.4) * 8;
-  const arm = ctx.createLinearGradient(0, -190, 0, -60);
-  arm.addColorStop(0, "#a78bfa");
-  arm.addColorStop(1, "#4c1d95");
-  ctx.fillStyle = arm;
-  poly(ctx, [[-78, -185], [-118, -170], [-132, -110 + armSwing], [-104, -60 + armSwing], [-84, -80 + armSwing], [-96, -140]]);
-  poly(ctx, [[78, -185], [118, -170], [132, -110 - armSwing], [104, -60 - armSwing], [84, -80 - armSwing], [96, -140]]);
-  // punhos brilhantes
-  ctx.fillStyle = "#e9d5ff";
-  ctx.beginPath(); ctx.arc(-108, -62 + armSwing, 9, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(108, -62 - armSwing, 9, 0, Math.PI * 2); ctx.fill();
-
-  // cabeça
-  const head = ctx.createLinearGradient(-30, -260, 30, -205);
-  head.addColorStop(0, "#ddd6fe");
-  head.addColorStop(1, "#5b21b6");
-  ctx.fillStyle = head;
-  poly(ctx, [[-30, -205], [-36, -240], [0, -268], [36, -240], [30, -205]]);
-  // olhos
-  ctx.fillStyle = "#fef3c7";
-  ctx.shadowColor = "#fde68a";
-  ctx.shadowBlur = 10;
-  ctx.beginPath();
-  ctx.ellipse(-12, -232, 6, 3.5, -0.35, 0, Math.PI * 2);
-  ctx.ellipse(12, -232, 6, 3.5, 0.35, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  // núcleo
-  const core = ctx.createRadialGradient(0, -135, 2, 0, -135, 34);
-  core.addColorStop(0, "#ffffff");
-  core.addColorStop(0.35, "#e9d5ff");
-  core.addColorStop(1, "rgba(233,213,255,0)");
-  ctx.fillStyle = core;
-  ctx.beginPath();
-  ctx.arc(0, -135, 34 + Math.sin(sim.time * 4) * 3, 0, Math.PI * 2);
-  ctx.fill();
-
-  // fragmentos orbitando
-  for (let i = 0; i < 6; i++) {
-    const a = sim.time * 0.9 + (i * Math.PI * 2) / 6;
-    const rx = 150;
-    const ry = 40;
-    const x = Math.cos(a) * rx;
-    const y = -150 + Math.sin(a) * ry;
-    const depth = (Math.sin(a) + 1) / 2;
-    ctx.globalAlpha = alpha * (0.5 + depth * 0.5);
-    ctx.fillStyle = depth > 0.5 ? "#c4b5fd" : "#6d28d9";
-    const sz = 10 + depth * 8;
-    poly(ctx, [[x, y - sz], [x + sz * 0.6, y], [x, y + sz], [x - sz * 0.6, y]], false);
-  }
-  ctx.restore();
-
-  // barra de vida do chefe (topo central)
-  if (!gone) {
-    const w = Math.min(W * 0.42, 420);
-    const x = W / 2 - w / 2;
-    const y = 14;
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    roundRect(ctx, x - 6, y - 6, w + 12, 28, 8);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    roundRect(ctx, x, y, w, 10, 5);
-    ctx.fill();
-    const hpg = ctx.createLinearGradient(x, 0, x + w, 0);
-    hpg.addColorStop(0, "#a855f7");
-    hpg.addColorStop(1, "#e879f9");
-    ctx.fillStyle = hpg;
-    roundRect(ctx, x, y, Math.max(0, w * sim.bossHp), 10, 5);
-    ctx.fill();
-    ctx.font = "600 11px Inter, sans-serif";
-    ctx.fillStyle = "#e9d5ff";
-    ctx.textAlign = "center";
-    ctx.fillText(`Guardião de Cristal · Nv. 42 · ${Math.round(sim.bossHp * 100)}%`, W / 2, y + 22);
-    ctx.textAlign = "left";
-  }
+function heroPose(h: Hero): Pose {
+  if (h.state === "run") return (["run0", "run1", "run2"] as Pose[])[Math.floor(h.anim * 9) % 3]!;
+  if (h.state === "attack") return h.stateT < 0.2 ? "attack0" : h.stateT < 0.4 ? "attack1" : "attack2";
+  if (h.state === "hit") return "hit";
+  if (h.state === "cheer") return Math.floor(h.stateT * 4) % 2 === 0 ? "cheer0" : "cheer1";
+  return "idle";
 }
 
-function drawHero(ctx: CanvasRenderingContext2D, h: Sim["heroes"][number], W: number, H: number, p: GamePlayer | undefined, now: number): void {
-  const x = h.x * W;
-  const y = h.y * H;
+function drawHero(ctx: CanvasRenderingContext2D, h: Hero, a: Assets, W: number, H: number, s: number, cam: number, p: GamePlayer | undefined, now: number): void {
+  const x = h.x * W - cam * W * 0.09;
+  const y = h.baseY * H;
   const c = COLORS[h.slot];
-  const scale = sceneScale(W, H) * 0.9;
-  const bob = Math.sin(h.bob) * 2.5;
-  const step = Math.sin(h.bob * 2) * 3;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(scale, scale);
+  const im = a.heroes[h.slot][heroPose(h)] ?? a.heroes[h.slot].idle;
+  const hh = 190 * s;
+  const ww = hh * 0.75;
+  const bob = h.state === "idle" ? Math.sin(h.anim * 2.2) * 3 * s : 0;
 
   // sombra e aura
-  ctx.fillStyle = "rgba(0,0,0,0.38)";
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
   ctx.beginPath();
-  ctx.ellipse(0, 4, 24, 7, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 2, ww * 0.4, 9 * s, 0, 0, Math.PI * 2);
   ctx.fill();
-  const aura = ctx.createRadialGradient(0, -50, 4, 0, -50, 75);
+  const aura = ctx.createRadialGradient(x, y - hh * 0.4, 4, x, y - hh * 0.4, hh * 0.55);
   aura.addColorStop(0, c.glow);
   aura.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = aura;
-  ctx.fillRect(-90, -140, 180, 180);
+  ctx.fillRect(x - hh, y - hh, hh * 2, hh * 1.4);
 
-  ctx.translate(0, bob);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(5,15,38,0.7)";
-
-  // capa
-  const cape = ctx.createLinearGradient(0, -95, 0, -10);
-  cape.addColorStop(0, c.main);
-  cape.addColorStop(1, c.dark);
-  ctx.fillStyle = cape;
-  poly(ctx, [[-16, -92], [16, -92], [24, -12 + Math.sin(h.bob * 1.3) * 3], [-24, -12 + Math.cos(h.bob * 1.3) * 3]]);
-
-  // pernas
-  ctx.fillStyle = "#1e293b";
-  roundRect(ctx, -13, -40, 11, 40 + step, 5); ctx.fill(); ctx.stroke();
-  roundRect(ctx, 2, -40, 11, 40 - step, 5); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = "#0f172a";
-  roundRect(ctx, -15, -6 + step, 15, 8, 3); ctx.fill();
-  roundRect(ctx, 0, -6 - step, 15, 8, 3); ctx.fill();
-
-  // torso (armadura)
-  const body = ctx.createLinearGradient(-16, -100, 16, -40);
-  body.addColorStop(0, "#f8fafc");
-  body.addColorStop(1, "#94a3b8");
-  ctx.fillStyle = body;
-  roundRect(ctx, -17, -98, 34, 60, 12); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = c.main;
-  roundRect(ctx, -17, -60, 34, 7, 3); ctx.fill();
-  // ombreiras
-  ctx.fillStyle = c.dark;
-  ctx.beginPath(); ctx.ellipse(-19, -92, 9, 6, -0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(19, -92, 9, 6, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  // braços
-  ctx.fillStyle = "#e2e8f0";
-  roundRect(ctx, -26, -88, 9, 34, 4); ctx.fill(); ctx.stroke();
-  roundRect(ctx, 17, -88, 9, 34, 4); ctx.fill(); ctx.stroke();
-
-  // cabeça
-  ctx.fillStyle = "#fde7d3";
-  ctx.beginPath(); ctx.arc(0, -114, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = "#1e293b";
-  ctx.beginPath(); ctx.arc(-5, -115, 1.6, 0, Math.PI * 2); ctx.arc(5, -115, 1.6, 0, Math.PI * 2); ctx.fill();
-  // cabelo / chapéu
-  if (h.slot === "A") {
-    ctx.fillStyle = "#7c2d12";
-    ctx.beginPath(); ctx.arc(0, -118, 13.5, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(11, -120); ctx.quadraticCurveTo(20, -100, 12, -88); ctx.lineTo(9, -104); ctx.closePath(); ctx.fill();
-  } else {
-    ctx.fillStyle = c.dark;
-    poly(ctx, [[-20, -124], [20, -124], [12, -128], [3, -165], [-8, -128]]);
-    ctx.fillStyle = c.main;
-    roundRect(ctx, -12, -130, 24, 5, 2); ctx.fill();
+  if (im) {
+    ctx.save();
+    ctx.translate(x, y + bob);
+    ctx.scale(h.face, 1);
+    ctx.drawImage(im, -ww / 2, -hh, ww, hh);
+    ctx.restore();
   }
 
-  // arma
-  if (h.slot === "A") {
-    ctx.strokeStyle = "#d6b98c";
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(28, -70, 24, -Math.PI / 2.1, Math.PI / 2.1); ctx.stroke();
-    ctx.strokeStyle = "rgba(255,255,255,0.6)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(35, -92); ctx.lineTo(35, -48); ctx.stroke();
-    // aljava
-    ctx.fillStyle = "#5b3a1a";
-    ctx.save(); ctx.translate(-18, -80); ctx.rotate(0.35); roundRect(ctx, -4, -14, 8, 30, 3); ctx.fill(); ctx.restore();
-  } else {
-    ctx.strokeStyle = "#7c5cff";
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(26, -30); ctx.lineTo(26, -125); ctx.stroke();
-    ctx.fillStyle = "#e9d5ff";
-    ctx.shadowColor = "#c084fc";
-    ctx.shadowBlur = 16;
-    ctx.beginPath(); ctx.arc(26, -132, 7 + Math.sin(now / 200) * 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
-  }
-  ctx.restore();
-
-  // nome e barras (em espaço de tela)
-  const label = (p?.name ?? (h.slot === "A" ? "Jogador A" : "Jogador B")) + (p?.isMe ? " (você)" : "");
-  ctx.font = "700 12px Inter, sans-serif";
-  const nameY = y - 150 * scale - 8;
+  // etiqueta e barras
+  const label = (p?.name ?? (h.slot === "A" ? "Jogador 1" : "Jogador 2")) + (p?.isMe ? " (você)" : "");
+  ctx.font = `700 ${12 * Math.max(0.9, s)}px Inter, sans-serif`;
+  const nameY = y - hh - 10 * s;
   const tw = ctx.measureText(label).width + 26;
-  ctx.fillStyle = "rgba(5,15,38,0.75)";
+  ctx.fillStyle = "rgba(5,15,38,0.78)";
   roundRect(ctx, x - tw / 2, nameY - 13, tw, 20, 10);
   ctx.fill();
-  ctx.fillStyle = p?.online === false ? "#5a6d8c" : "#3fd6c6";
+  ctx.fillStyle = p?.online === false ? "#6b7a99" : "#3fd6c6";
   ctx.beginPath();
   ctx.arc(x - tw / 2 + 10, nameY - 3, 3.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#f4f7fb";
-  ctx.textAlign = "left";
   ctx.fillText(label, x - tw / 2 + 18, nameY + 1);
-  const bw = 64;
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  roundRect(ctx, x - bw / 2, nameY + 10, bw, 4, 2); ctx.fill();
-  ctx.fillStyle = "#4ade80";
-  roundRect(ctx, x - bw / 2, nameY + 10, bw * h.hp, 4, 2); ctx.fill();
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  roundRect(ctx, x - bw / 2, nameY + 15, bw, 3, 1.5); ctx.fill();
-  ctx.fillStyle = "#60a5fa";
-  roundRect(ctx, x - bw / 2, nameY + 15, bw * h.mp, 3, 1.5); ctx.fill();
+  const bw = 64 * Math.max(0.9, s);
+  bar(ctx, x - bw / 2, nameY + 10, bw, 4, h.hp, "#4ade80");
+  bar(ctx, x - bw / 2, nameY + 15, bw, 3, h.mp, "#60a5fa");
 
-  // balão de fala / digitando
-  const bubble = p?.bubble && now - p.bubble.at < 5000 ? p.bubble.text : null;
+  // balão
+  const bubble = p?.bubble && now - p.bubble.at < 6000 ? p.bubble.text : null;
   if (bubble || p?.typing) {
     const text = bubble ?? "…";
-    ctx.font = "500 12px Inter, sans-serif";
-    const maxW = Math.min(220, W * 0.4);
-    const lines = wrap(ctx, text, maxW - 20).slice(0, 3);
-    const bwid = Math.min(maxW, Math.max(...lines.map((l) => ctx.measureText(l).width)) + 20);
-    const bh = lines.length * 15 + 12;
+    ctx.font = "500 13px Inter, sans-serif";
+    const maxW = Math.min(240, W * 0.42);
+    const lines = wrap(ctx, text, maxW - 22).slice(0, 3);
+    const bwid = Math.min(maxW, Math.max(...lines.map((l) => ctx.measureText(l).width)) + 22);
+    const bh = lines.length * 16 + 14;
     const bx = Math.min(W - bwid - 6, Math.max(6, x - bwid / 2));
-    const byy = nameY - 24 - bh;
-    ctx.fillStyle = "rgba(244,247,251,0.96)";
-    roundRect(ctx, bx, byy, bwid, bh, 10);
+    const byy = nameY - 26 - bh;
+    ctx.fillStyle = "rgba(255,255,255,0.97)";
+    roundRect(ctx, bx, byy, bwid, bh, 12);
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(x - 6, byy + bh);
-    ctx.lineTo(x + 6, byy + bh);
-    ctx.lineTo(x, byy + bh + 7);
+    ctx.moveTo(x - 7, byy + bh);
+    ctx.lineTo(x + 7, byy + bh);
+    ctx.lineTo(x, byy + bh + 8);
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = "#10192c";
     if (p?.typing && !bubble) {
       const dots = Math.floor(now / 350) % 4;
-      ctx.fillText(".".repeat(dots) || " ", bx + bwid / 2 - 8, byy + 18);
-    } else {
-      lines.forEach((l, i) => ctx.fillText(l, bx + 10, byy + 18 + i * 15));
-    }
+      ctx.fillText(".".repeat(dots) || " ", bx + bwid / 2 - 8, byy + 19);
+    } else lines.forEach((l, i) => ctx.fillText(l, bx + 11, byy + 19 + i * 16));
   }
 }
 
-function drawHud(ctx: CanvasRenderingContext2D, sim: Sim, W: number, H: number, players: GamePlayer[], roomName: string, lite: boolean): void {
+function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, a: Assets, W: number, H: number, s: number, cam: number, time: number): void {
+  const x = e.x * W - cam * W * 0.09;
+  const y = e.y * H;
+  let im: HTMLImageElement | undefined;
+  if (e.kind === "bat") im = e.dead ? a.enemies.bat_hit : Math.floor(e.t * 6) % 2 ? a.enemies.bat_fly : a.enemies.bat;
+  else if (e.kind === "ghost") im = e.dead ? a.enemies.ghost_dead : Math.floor(e.t * 4) % 2 ? a.enemies.ghost_normal : a.enemies.ghost;
+  else im = e.dead ? a.enemies.slimeDead : Math.floor(e.t * 5) % 2 ? a.enemies.slimeWalk1 : a.enemies.slimeWalk2;
+  if (!im) return;
+  const size = (e.kind === "slime" ? 54 : 60) * s;
+  const w = size;
+  const h = size * (im.height / im.width);
+  ctx.save();
+  ctx.globalAlpha = e.dead ? Math.max(0, 1 - e.dead) : 1;
+  if (e.kind !== "slime") {
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.beginPath();
+    ctx.ellipse(x, H * 0.86, w * 0.3, 5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.translate(x, y + (e.kind === "slime" ? 0 : Math.sin(time * 3 + e.seed) * 4 * s));
+  ctx.drawImage(im, -w / 2, -h, w, h);
+  ctx.restore();
+  if (!e.dead) {
+    const max = e.kind === "slime" ? 3 : 2;
+    bar(ctx, x - 18 * s, y - h - 8 * s, 36 * s, 3, e.hp / max, "#f87171");
+  }
+}
+
+function drawBoss(ctx: CanvasRenderingContext2D, sim: Sim, a: Assets, W: number, H: number, s: number, cam: number): void {
+  const b = sim.boss;
+  if (b.phase === "gone") return;
+  const x = b.x * W - cam * W * 0.09;
+  const y = H * 0.86;
+  const pose = b.phase === "attack" ? (b.t < 0.35 ? "attack0" : "attack1") : b.phase === "hit" ? "hit" : b.phase === "dying" ? "fall" : Math.floor(b.t * 2) % 2 ? "walk0" : "idle";
+  const im = a.boss[pose] ?? a.boss.idle;
+  if (!im) return;
+  const hh = 300 * s;
+  const ww = hh * 0.75;
+  const alpha = b.phase === "dying" ? Math.max(0, 1 - b.t / 2.2) : 1;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 4, ww * 0.42, 14 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const aura = ctx.createRadialGradient(x, y - hh * 0.45, 10, x, y - hh * 0.45, hh * 0.6);
+  aura.addColorStop(0, "rgba(96,165,250,0.35)");
+  aura.addColorStop(1, "rgba(96,165,250,0)");
+  ctx.fillStyle = aura;
+  ctx.fillRect(x - hh, y - hh * 1.2, hh * 2, hh * 1.6);
+  ctx.translate(x, y + (b.phase === "dying" ? b.t * 20 * s : Math.sin(b.t * 1.5) * 3 * s));
+  ctx.scale(-1, 1);
+  ctx.drawImage(im, -ww / 2, -hh, ww, hh);
+  ctx.restore();
+
+  // barra do chefe
+  const w = Math.min(W * 0.4, 400);
+  const bx = W / 2 - w / 2;
+  const by = 12;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  roundRect(ctx, bx - 8, by - 6, w + 16, 32, 8);
+  ctx.fill();
+  bar(ctx, bx, by, w, 10, b.hp, "#a78bfa");
+  ctx.font = "600 11px Inter, sans-serif";
+  ctx.fillStyle = "#e9d5ff";
+  ctx.textAlign = "center";
+  ctx.fillText(`Sentinela de Ferro · Nv. 42 · ${Math.round(b.hp * 100)}%`, W / 2, by + 24);
+  ctx.textAlign = "left";
+}
+
+function drawHud(ctx: CanvasRenderingContext2D, sim: Sim, a: Assets, W: number, H: number, s: number, players: GamePlayer[], roomName: string, lite: boolean): void {
   const pad = 10;
   const narrow = W < 700;
-  // painel do grupo (topo esquerdo; em telas estreitas desce para não cobrir a barra do chefe)
+  // grupo
   const rows = sim.heroes.map((h) => ({ h, p: players.find((p) => p.slot === h.slot) }));
-  const pw = narrow ? 120 : 150;
-  const ph = 16 + rows.length * 28;
-  const gy = narrow ? 44 : pad;
-  ctx.fillStyle = "rgba(5,15,38,0.62)";
-  roundRect(ctx, pad, gy, pw, ph, 10);
+  const pw = narrow ? 150 : 190;
+  const rowH = 34;
+  const ph = 14 + rows.length * rowH;
+  const gy = narrow ? 48 : pad;
+  ctx.fillStyle = "rgba(5,12,32,0.66)";
+  roundRect(ctx, pad, gy, pw, ph, 12);
   ctx.fill();
-  ctx.font = "700 10px Inter, sans-serif";
-  ctx.fillStyle = "#a3b3cc";
-  ctx.fillText("GRUPO", pad + 10, gy + 13);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  roundRect(ctx, pad, gy, pw, ph, 12);
+  ctx.stroke();
   rows.forEach(({ h, p }, i) => {
-    const y = gy + 22 + i * 28;
-    const c = COLORS[h.slot];
-    ctx.fillStyle = c.main;
+    const y = gy + 10 + i * rowH;
+    const face = a.heroes[h.slot].idle;
+    ctx.save();
     ctx.beginPath();
-    ctx.arc(pad + 16, y + 7, 6, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(pad + 22, y + 12, 12, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = COLORS[h.slot].main;
+    ctx.fillRect(pad + 8, y, 30, 30);
+    if (face) ctx.drawImage(face, pad + 5, y + 2, 34, 45);
+    ctx.restore();
     ctx.fillStyle = "#f4f7fb";
-    ctx.font = "600 11px Inter, sans-serif";
-    ctx.fillText((p?.name ?? (h.slot === "A" ? "Jogador A" : "Jogador B")).slice(0, 14), pad + 28, y + 11);
-    ctx.fillStyle = "rgba(255,255,255,0.12)";
-    roundRect(ctx, pad + 28, y + 15, pw - 40, 4, 2);
-    ctx.fill();
-    ctx.fillStyle = "#4ade80";
-    roundRect(ctx, pad + 28, y + 15, (pw - 40) * h.hp, 4, 2);
-    ctx.fill();
+    ctx.font = "700 11px Inter, sans-serif";
+    ctx.fillText((p?.name ?? (h.slot === "A" ? "Jogador 1" : "Jogador 2")).slice(0, 16), pad + 42, y + 10);
+    bar(ctx, pad + 42, y + 15, pw - 60, 5, h.hp, "#4ade80");
+    bar(ctx, pad + 42, y + 22, pw - 60, 3, h.mp, "#60a5fa");
     ctx.fillStyle = p?.online ? "#3fd6c6" : "#5a6d8c";
     ctx.beginPath();
-    ctx.arc(pad + pw - 12, y + 7, 3, 0, Math.PI * 2);
+    ctx.arc(pad + pw - 10, y + 8, 3, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // missão (topo direito)
+  // missão e recursos (topo direito)
   if (!narrow) {
-    const qw = Math.min(200, W * 0.36);
-    ctx.fillStyle = "rgba(5,15,38,0.62)";
-    roundRect(ctx, W - qw - pad, pad, qw, 52, 10);
+    const qw = Math.min(230, W * 0.3);
+    ctx.fillStyle = "rgba(5,12,32,0.66)";
+    roundRect(ctx, W - qw - pad, pad, qw, 66, 12);
     ctx.fill();
     ctx.font = "700 10px Inter, sans-serif";
     ctx.fillStyle = "#fbc38f";
-    ctx.fillText("MISSÃO · DUNGEON DO VULCÃO", W - qw - pad + 10, pad + 14);
+    ctx.fillText("MISSÃO · DUNGEON DO VULCÃO", W - qw - pad + 12, pad + 16);
     ctx.font = "500 11px Inter, sans-serif";
     ctx.fillStyle = "#f4f7fb";
-    ctx.fillText(`Derrote o Guardião  ${Math.min(sim.kills, 3)}/3`, W - qw - pad + 10, pad + 30);
+    ctx.fillText(`Sobreviva às ondas · Onda ${sim.wave} · ${sim.kills} derrotados`, W - qw - pad + 12, pad + 32);
+    const gem = a.items.gemBlue;
+    const coin = a.items.coinGold;
+    if (gem) ctx.drawImage(gem, W - qw - pad + 12, pad + 42, 16, 16);
+    ctx.fillText(`${sim.gems}`, W - qw - pad + 32, pad + 55);
+    if (coin) ctx.drawImage(coin, W - qw - pad + 70, pad + 42, 16, 16);
+    ctx.fillText(`${sim.coins}`, W - qw - pad + 90, pad + 55);
     ctx.fillStyle = "#a3b3cc";
     ctx.font = "500 10px Inter, sans-serif";
-    ctx.fillText(roomName.slice(0, 28), W - qw - pad + 10, pad + 44);
+    ctx.fillText(roomName.slice(0, 26), W - qw - pad + 140, pad + 55);
   }
 
-  // barra de habilidades (rodapé central)
+  // barra de habilidades
   const n = 4;
-  const size = lite ? 30 : 36;
+  const size = lite ? 32 : 40;
   const gap = 8;
   const total = n * size + (n - 1) * gap;
   const sx = W / 2 - total / 2;
   const sy = H - size - 12;
-  const icons = ["◆", "✦", "❖", "✚"];
+  const icons = [a.items.gemBlue, a.items.gemRed, a.items.gemGreen, a.items.gemYellow];
   for (let i = 0; i < n; i++) {
     const x = sx + i * (size + gap);
-    ctx.fillStyle = "rgba(5,15,38,0.7)";
-    roundRect(ctx, x, sy, size, size, 8);
+    ctx.fillStyle = "rgba(5,12,32,0.72)";
+    roundRect(ctx, x, sy, size, size, 9);
     ctx.fill();
-    ctx.strokeStyle = "rgba(143,232,222,0.35)";
-    ctx.lineWidth = 1;
-    roundRect(ctx, x, sy, size, size, 8);
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    roundRect(ctx, x, sy, size, size, 9);
     ctx.stroke();
-    ctx.font = `${size * 0.5}px serif`;
-    ctx.fillStyle = ["#8fe8de", "#fbc38f", "#c4b5fd", "#86efac"][i]!;
-    ctx.textAlign = "center";
-    ctx.fillText(icons[i]!, x + size / 2, sy + size * 0.66);
-    ctx.textAlign = "left";
+    const ic = icons[i];
+    if (ic) ctx.drawImage(ic, x + size * 0.2, sy + size * 0.2, size * 0.6, size * 0.6);
     const cd = sim.skillCd[i] ?? 0;
     if (cd > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      roundRect(ctx, x, sy, size, size * Math.min(1, cd / [4, 7, 12, 20][i]!), 8);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      roundRect(ctx, x, sy, size, size * Math.min(1, cd / [4, 7, 12, 20][i]!), 9);
       ctx.fill();
     }
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "700 9px Inter, sans-serif";
+    ctx.fillText(String(i + 1), x + 4, sy + 11);
   }
 
-  // loot
-  if (sim.lootTimer > 0) {
-    ctx.globalAlpha = Math.min(1, sim.lootTimer);
-    ctx.font = "700 13px Sora, Inter, sans-serif";
-    ctx.fillStyle = "#fde68a";
+  // faixa de evento
+  if (sim.banner) {
+    const t = sim.banner.t;
+    const alpha = t < 0.3 ? t / 0.3 : t > 2.8 ? Math.max(0, (3.5 - t) / 0.7) : 1;
+    ctx.globalAlpha = alpha;
+    ctx.font = `800 ${18 * Math.max(0.8, s)}px Sora, Inter, sans-serif`;
     ctx.textAlign = "center";
-    ctx.fillText("Guardião derrotado! Espada de Gelo obtida", W / 2, H - size - 26);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.fillStyle = "#fde68a";
+    ctx.strokeText(sim.banner.text, W / 2, H * 0.3);
+    ctx.fillText(sim.banner.text, W / 2, H * 0.3);
     ctx.textAlign = "left";
     ctx.globalAlpha = 1;
   }
 
-  // selo de simulação
   ctx.font = "600 9px Inter, sans-serif";
   ctx.fillStyle = "rgba(244,247,251,0.45)";
-  ctx.fillText("ARENA NIMBUS · simulação visual, não interativa", pad, H - 8);
+  ctx.fillText("ARENA NIMBUS · simulação, não interativa", pad, H - 8);
 }
 
 /* ---------------------------------- utilitários ---------------------------------- */
 
-function poly(ctx: CanvasRenderingContext2D, pts: [number, number][], stroke = true): void {
-  ctx.beginPath();
-  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-  ctx.closePath();
+function bar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, v: number, color: string): void {
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(ctx, x, y, w, h, h / 2);
   ctx.fill();
-  if (stroke) ctx.stroke();
+  ctx.fillStyle = color;
+  roundRect(ctx, x, y, Math.max(0, w * Math.max(0, Math.min(1, v))), h, h / 2);
+  ctx.fill();
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
