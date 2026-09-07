@@ -24,6 +24,7 @@ test("crítico → decisão humana com justificativa → painel do responsável 
   await expect(caseItem.first()).toContainText("P1");
 
   await caseItem.first().click();
+  await m.page.screenshot({ path: "docs/capturas/04-moderacao-caso.png", fullPage: true });
   await m.page.getByTestId("action-confirm").click();
   await m.page.getByTestId("confirm-action").click();
   await expect(m.page.getByText(/justificativa é obrigatória/i)).toBeVisible();
@@ -31,6 +32,7 @@ test("crítico → decisão humana com justificativa → painel do responsável 
   await m.page.getByTestId("confirm-action").click();
   await expect(m.page.getByTestId("case-view")).toContainText("Risco confirmado", { timeout: 20_000 });
   await expect(g.page.getByTestId("guardian-case")).toContainText("Risco confirmado", { timeout: 20_000 });
+  await g.page.screenshot({ path: "docs/capturas/05-responsavel-decisao.png", fullPage: true });
   await expect(p.page.getByText(/Chamadas LLM/)).toBeVisible();
 
   await closeWorld(p.page);

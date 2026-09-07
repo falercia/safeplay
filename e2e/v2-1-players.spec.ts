@@ -34,12 +34,15 @@ test("início → entrar → lobby → mundo → chat ao vivo entre dois navegad
   await expect(b.page.getByRole("log")).toContainText("bora jogar?", { timeout: 5_000 });
   console.log(`entrega A→B (quente): ${Date.now() - t1} ms`);
 
+  await a.page.screenshot({ path: "docs/capturas/01-mundo-jogo-chat.png" });
   writeFileSync(STATE_FILE, world);
   await Promise.all([a.context.close(), b.context.close()]);
 });
 
 test("código de acesso errado é bloqueado no servidor", async ({ page }) => {
   requireCodes();
+  await page.goto("/");
+  await page.screenshot({ path: "docs/capturas/00-inicio.png" });
   await enterGame(page, "Intruso", "ERRADO-123");
   await expect(page.getByText(/código de acesso inválido/i)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/entrar/);

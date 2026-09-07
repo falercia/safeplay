@@ -24,7 +24,9 @@ test("roteiro progressivo → alerta no responsável → caso único na moderaç
   await advance(p.page, 9);
   await expect(g.page.getByTestId("guardian-state")).toHaveAttribute("data-level", /alto|critico/, { timeout: 30_000 });
   await expect(caseItem).toHaveCount(1, { timeout: 30_000 });
+  await g.page.screenshot({ path: "docs/capturas/02-responsavel-alto.png", fullPage: true });
   await expect(p.page.getByText("Status dos serviços")).toBeVisible();
+  await p.page.screenshot({ path: "docs/capturas/03-apresentador.png", fullPage: true });
   await expect(p.page.getByText(/pronta · claude|modo regras|plano B/)).toBeVisible();
 
   await Promise.all([g.context.close(), m.context.close(), p.context.close()]);
