@@ -16,6 +16,12 @@
 - Latência da LLM: p50 6,8 s → 4,0 s, sem timeouts (saída enxuta, prefill JSON, max_tokens 600).
 - Tela do jogador virou jogo + chat: Arena Nimbus (canvas 2D procedural, RPG cooperativo simulado, não interativo, sem reação ao risco). E2E progressivo passou contra a URL pública com o novo layout. Capturas em docs/capturas/00-jogo-chat*.png.
 
+## Sessão 3 (2026-09-07) · v2 em andamento
+- Backend v2 pronto e deployado (commit 7d9b5e7): tabela `worlds`, view `world_lobby`, sessão GLOBAL, functions `game-enter`, `world-create`, `world-join`, `role-login`, `demo-control` por mundo. Ver docs/REDESIGN-v2.md.
+- Cena do jogo reescrita com assets CC0 Kenney (commit dac2db9): typecheck/lint/build ok; verificação visual pendente.
+- Próximo: fase 3 (telas `/`, `/entrar`, `/lobby`, `/mundo/[code]`), depois `/moderacao`, `/responsavel`, `/apresentador`, E2E, deploy e remoção das rotas v1.
+- Códigos: acesso do jogo, moderação e responsável estão nos secrets do Supabase (GAME_ACCESS_CODE, MODERATOR_CODE, GUARDIAN_CODE).
+
 ## Deploy público
 - Vercel: https://safe-play-poc.vercel.app (projeto `safe-play-poc`, deploy via CLI a partir do container; env NEXT_PUBLIC_* configuradas). Cenário falso positivo validado por E2E contra a URL pública.
 
