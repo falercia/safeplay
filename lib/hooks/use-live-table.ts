@@ -97,11 +97,12 @@ export function useLiveTable<T extends object>(opts: Options<T>): LiveTable<T> {
       setError(err.message);
     } else {
       setError(null);
+      // a consulta completa é a verdade: linhas ausentes foram apagadas (eventos DELETE filtrados
+      // por coluna não chegam, pois o registro antigo só traz a chave primária)
       setRows((prev) => {
-        const map = new Map<string, T>();
-        for (const r of prev) map.set(keyOf(r), r);
-        for (const r of (data ?? []) as unknown as T[]) map.set(keyOf(r), { ...(map.get(keyOf(r)) ?? {}), ...r });
-        return sortRows([...map.values()]);
+        const before = new Map<string, T>();
+        for (const r of prev) before.set(keyOf(r), r);
+        return sortRows(((data ?? []) as unknown as T[]).map((r) => ({ ...(before.get(keyOf(r)) ?? {}), ...r })));
       });
     }
     setLoading(false);
@@ -111,6 +112,20 @@ export function useLiveTable<T extends object>(opts: Options<T>): LiveTable<T> {
     if (!enabled) return;
     void refetch();
   }, [refetch, refetchKey, enabled]);
+
+  // ao voltar o foco/aba, sincroniza (cobre exclusões feitas enquanto a aba estava em segundo plano)
+  React.useEffect(() => {
+    if (!enabled) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refetch();
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refetch, enabled]);
 
   React.useEffect(() => {
     const sb = getSupabase();

@@ -14,7 +14,7 @@ import { TransparencyBody } from "@/components/safety/transparency";
 import { useLiveTable } from "@/lib/hooks/use-live-table";
 import { useRoomIntel } from "@/lib/hooks/use-room-intel";
 import { callFunction, ApiError } from "@/lib/api";
-import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, Level, RoleLoginResult, RoomRow, WorldRow } from "@/lib/types";
+import type { CaseActionRow, CaseRow, CaseStatus, GlossaryRow, Level, RoleLoginResult, RoomMemberRow, RoomRow, WorldRow } from "@/lib/types";
 import { ACTION_LABEL, CASE_STATUS_LABEL, formatCountdown, formatShortTime, levelClass, signalLabel } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -43,9 +43,11 @@ function ModerationInner({ data, logout }: { data: RoleLoginResult; logout: () =
   const { t } = useT();
   const sessionId = data.profile.session_id;
   const now = useNow();
-  const cases = useLiveTable<CaseRow>({ table: "cases", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false } });
-  const worlds = useLiveTable<WorldRow>({ table: "worlds", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false } });
-  const rooms = useLiveTable<RoomRow>({ table: "rooms", filter: { column: "session_id", value: sessionId } });
+  // exclusões de mundos chegam via room_members (assinatura sem filtro); usam-se como gatilho de recarga
+  const membersLive = useLiveTable<RoomMemberRow>({ table: "room_members", filter: null, select: "room_id, profile_id", rowKey: (r) => `${r.room_id}:${r.profile_id}` });
+  const cases = useLiveTable<CaseRow>({ table: "cases", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false }, refetchKey: membersLive.rows.length });
+  const worlds = useLiveTable<WorldRow>({ table: "worlds", filter: { column: "session_id", value: sessionId }, orderBy: { column: "created_at", ascending: false }, refetchKey: membersLive.rows.length });
+  const rooms = useLiveTable<RoomRow>({ table: "rooms", filter: { column: "session_id", value: sessionId }, refetchKey: membersLive.rows.length });
   const worldOf = React.useCallback((roomId: string) => worlds.rows.find((w) => w.room_id === roomId) ?? null, [worlds.rows]);
   const openWorlds = worlds.rows.filter((w) => w.status === "open");
   const [worldFilter, setWorldFilter] = React.useState<string | null>(null);
