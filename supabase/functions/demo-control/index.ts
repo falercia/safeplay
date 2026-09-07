@@ -1,205 +1,154 @@
 import { z } from "zod";
 import { handle, HttpError, json, readJson } from "../_shared/deno/http.ts";
-import { adminClient, randomCode, randomToken, requirePresenterSecret, requireUser, type Admin } from "../_shared/deno/supabase.ts";
+import { adminClient, requirePresenterSecret, requireUser, type Admin } from "../_shared/deno/supabase.ts";
+import { findProfile, getGlobalSession, type GlobalSession } from "../_shared/deno/session.ts";
 import { runAnalysis } from "../_shared/deno/pipeline.ts";
 import { claudeConfigFromEnv } from "../_shared/deno/claude.ts";
 import { RULES_VERSION, SCENARIOS, type ScenarioKey } from "../_shared/risk/index.ts";
 
 const ScenarioSchema = z.enum(["saudavel", "progressivo", "falso_positivo"]);
 const Body = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("create"), scenario: ScenarioSchema }),
-  z.object({ action: z.literal("list") }),
-  z.object({ action: z.literal("status"), sessionCode: z.string() }),
-  z.object({ action: z.literal("reset"), sessionCode: z.string() }),
-  z.object({ action: z.literal("delete"), sessionCode: z.string() }),
-  z.object({ action: z.literal("set_scenario"), sessionCode: z.string(), scenario: ScenarioSchema }),
-  z.object({ action: z.literal("advance"), sessionCode: z.string() }),
-  z.object({ action: z.literal("set_setting"), sessionCode: z.string(), key: z.enum(["llm_disabled", "force_llm_failure"]), value: z.boolean() }),
+  z.object({ action: z.literal("list_worlds") }),
+  z.object({ action: z.literal("status"), worldCode: z.string() }),
+  z.object({ action: z.literal("advance"), worldCode: z.string() }),
+  z.object({ action: z.literal("set_scenario"), worldCode: z.string(), scenario: ScenarioSchema }),
+  z.object({ action: z.literal("reset_world"), worldCode: z.string() }),
+  z.object({ action: z.literal("close_world"), worldCode: z.string() }),
+  z.object({ action: z.literal("set_setting"), key: z.enum(["llm_disabled", "force_llm_failure"]), value: z.boolean() }),
 ]);
 
-interface SessionRow {
+interface WorldRow {
   id: string;
   code: string;
+  name: string;
+  status: string;
+  room_id: string;
   scenario: ScenarioKey;
   script_cursor: number;
-  settings: Record<string, unknown>;
-  reset_count: number;
+  created_by_profile_id: string | null;
   created_at: string;
-  presenter_auth_user_id: string | null;
 }
 
+/** Central do apresentador (v2): opera sobre mundos da sessão global. Protegida por PRESENTER_SECRET. */
 Deno.serve(
   handle(async (req) => {
     requirePresenterSecret(req);
     const admin = adminClient();
     const user = await requireUser(req, admin);
     const body = Body.parse(await readJson(req));
+    const session = await getGlobalSession(admin);
+    await ensurePresenter(admin, session.id, user.id);
 
-    if (body.action === "create") {
-      const session = await createSession(admin, body.scenario, user.id);
-      return json({ ok: true, status: await buildStatus(admin, session) });
+    if (body.action === "list_worlds") {
+      const { data } = await admin.from("world_lobby").select("*").eq("session_id", session.id).order("created_at", { ascending: false }).limit(30);
+      const { data: rooms } = await admin.from("rooms").select("id, safety_level, safety_score, contained, analysis_pending").eq("session_id", session.id);
+      const byRoom = new Map((rooms ?? []).map((r) => [r.id as string, r]));
+      return json({ ok: true, worlds: (data ?? []).map((w) => ({ ...w, room: byRoom.get(w.room_id as string) ?? null })), health: await health(admin, session) });
     }
-    if (body.action === "list") {
-      const { data } = await admin.from("demo_sessions").select("id, code, scenario, script_cursor, created_at, reset_count").order("created_at", { ascending: false }).limit(10);
-      return json({ ok: true, sessions: data ?? [] });
+    if (body.action === "set_setting") {
+      const settings = { ...(session.settings ?? {}), [body.key]: body.value };
+      await admin.from("demo_sessions").update({ settings }).eq("id", session.id);
+      await admin.from("audit_events").insert({ session_id: session.id, event_type: "session.setting_changed", actor_type: "presenter", payload: { key: body.key, value: body.value } });
+      return json({ ok: true, health: await health(admin, { ...session, settings }) });
     }
 
-    const session = await loadSession(admin, body.sessionCode);
-    await ensurePresenterBinding(admin, session, user.id);
-
+    const world = await loadWorld(admin, body.worldCode);
     switch (body.action) {
       case "status":
-        return json({ ok: true, status: await buildStatus(admin, session) });
-      case "reset": {
-        await admin.rpc("admin_reset_session_data", { p_session: session.id });
-        await admin.from("audit_events").insert({ session_id: session.id, event_type: "session.reset", actor_type: "presenter", payload: { reset_count: session.reset_count + 1 } });
-        return json({ ok: true, status: await buildStatus(admin, await loadSession(admin, session.code)) });
+        return json({ ok: true, status: await buildStatus(admin, session, world) });
+      case "reset_world": {
+        await admin.rpc("admin_reset_world", { p_world: world.id });
+        await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "world.reset", actor_type: "presenter", payload: { world_code: world.code } });
+        return json({ ok: true, status: await buildStatus(admin, session, await loadWorld(admin, world.code)) });
       }
-      case "delete": {
-        await deleteAnonymousUsers(admin, session.id, user.id);
-        await admin.rpc("admin_reset_session", { p_session: session.id });
+      case "close_world": {
+        await admin.from("worlds").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", world.id);
+        await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "world.closed", actor_type: "presenter", payload: { world_code: world.code } });
         return json({ ok: true });
       }
       case "set_scenario": {
-        await admin.rpc("admin_reset_session_data", { p_session: session.id });
-        const sc = SCENARIOS[body.scenario];
-        await admin.from("demo_sessions").update({ scenario: body.scenario, script_cursor: 0 }).eq("id", session.id);
-        for (const key of ["A", "B"] as const) {
-          await admin.from("profiles").update({ display_name: sc.personas[key].name, tagline: sc.personas[key].tagline, avatar: sc.personas[key].avatar }).eq("session_id", session.id).eq("persona_key", key);
-        }
-        await admin.from("audit_events").insert({ session_id: session.id, event_type: "session.scenario_changed", actor_type: "presenter", payload: { scenario: body.scenario } });
-        return json({ ok: true, status: await buildStatus(admin, await loadSession(admin, session.code)) });
-      }
-      case "set_setting": {
-        const settings = { ...(session.settings ?? {}), [body.key]: body.value };
-        await admin.from("demo_sessions").update({ settings }).eq("id", session.id);
-        await admin.from("audit_events").insert({ session_id: session.id, event_type: "session.setting_changed", actor_type: "presenter", payload: { key: body.key, value: body.value } });
-        return json({ ok: true, status: await buildStatus(admin, await loadSession(admin, session.code)) });
+        await admin.from("worlds").update({ scenario: body.scenario, script_cursor: 0 }).eq("id", world.id);
+        await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "world.scenario_changed", actor_type: "presenter", payload: { scenario: body.scenario } });
+        return json({ ok: true, status: await buildStatus(admin, session, await loadWorld(admin, world.code)) });
       }
       case "advance": {
-        const scenario = SCENARIOS[session.scenario];
-        const line = scenario.script[session.script_cursor];
-        if (!line) return json({ ok: true, done: true, status: await buildStatus(admin, session) });
-        const { data: room } = await admin.from("rooms").select("id, contained").eq("session_id", session.id).limit(1).single<{ id: string; contained: boolean }>();
-        const { data: persona } = await admin.from("profiles").select("id").eq("session_id", session.id).eq("persona_key", line.speaker).single<{ id: string }>();
-        if (!room || !persona) throw new HttpError(500, "session_incomplete");
-        const cursor = session.script_cursor;
-        // avanço atômico: só quem "ganha" o incremento do cursor insere a mensagem (evita duplo clique/concorrência)
-        const { data: claimed } = await admin.from("demo_sessions").update({ script_cursor: cursor + 1 }).eq("id", session.id).eq("script_cursor", cursor).select("id").maybeSingle<{ id: string }>();
-        if (!claimed) return json({ ok: true, done: false, skipped: true, status: await buildStatus(admin, await loadSession(admin, session.code)) });
+        const scenario = SCENARIOS[world.scenario];
+        const line = scenario.script[world.script_cursor];
+        if (!line) return json({ ok: true, done: true, status: await buildStatus(admin, session, world) });
+        const speakers = await worldSpeakers(admin, world);
+        const speaker = line.speaker === "A" ? speakers.A : speakers.B;
+        if (!speaker) throw new HttpError(409, "waiting_second_player", "A próxima fala é do segundo jogador; aguarde alguém entrar no mundo.");
+        const cursor = world.script_cursor;
+        const { data: claimed } = await admin.from("worlds").update({ script_cursor: cursor + 1 }).eq("id", world.id).eq("script_cursor", cursor).select("id").maybeSingle<{ id: string }>();
+        if (!claimed) return json({ ok: true, done: false, skipped: true, status: await buildStatus(admin, session, await loadWorld(admin, world.code)) });
         const { data: msg } = await admin
           .from("messages")
-          .insert({ room_id: room.id, session_id: session.id, sender_profile_id: persona.id, content: line.text, client_msg_id: `script-${session.reset_count}-${cursor}`, source: "script" })
+          .insert({ room_id: world.room_id, session_id: session.id, sender_profile_id: speaker, content: line.text, client_msg_id: `script-${world.id.slice(0, 8)}-${Date.now()}-${cursor}`, source: "script" })
           .select("id")
           .maybeSingle<{ id: string }>();
-        await admin.from("audit_events").insert({ session_id: session.id, room_id: room.id, event_type: "script.advanced", actor_type: "presenter", payload: { index: cursor, speaker: line.speaker, force_llm: Boolean(line.forceLlm) } });
-        if (msg) {
-          // síncrono aqui: o apresentador quer ver o efeito ao avançar (o chat já recebeu a mensagem via Realtime)
-          await runAnalysis(admin, { roomId: room.id, triggerType: line.forceLlm ? "script_forced" : "message", triggerMessageId: msg.id, forceLlm: Boolean(line.forceLlm) });
-        }
-        return json({ ok: true, done: cursor + 1 >= scenario.script.length, line: { index: cursor, speaker: line.speaker, note: line.note ?? null, forceLlm: Boolean(line.forceLlm) }, status: await buildStatus(admin, await loadSession(admin, session.code)) });
+        await admin.from("audit_events").insert({ session_id: session.id, room_id: world.room_id, event_type: "script.advanced", actor_type: "presenter", payload: { index: cursor, speaker: line.speaker, force_llm: Boolean(line.forceLlm) } });
+        if (msg) await runAnalysis(admin, { roomId: world.room_id, triggerType: line.forceLlm ? "script_forced" : "message", triggerMessageId: msg.id, forceLlm: Boolean(line.forceLlm) });
+        return json({ ok: true, done: cursor + 1 >= scenario.script.length, line: { index: cursor, speaker: line.speaker, note: line.note ?? null, forceLlm: Boolean(line.forceLlm) }, status: await buildStatus(admin, session, await loadWorld(admin, world.code)) });
       }
     }
     throw new HttpError(400, "unknown_action");
   }),
 );
 
-async function loadSession(admin: Admin, code: string): Promise<SessionRow> {
-  const { data } = await admin.from("demo_sessions").select("id, code, scenario, script_cursor, settings, reset_count, created_at, presenter_auth_user_id").eq("code", code).maybeSingle<SessionRow>();
-  if (!data) throw new HttpError(404, "session_not_found");
+async function loadWorld(admin: Admin, code: string): Promise<WorldRow> {
+  const { data } = await admin.from("worlds").select("id, code, name, status, room_id, scenario, script_cursor, created_by_profile_id, created_at").eq("code", code.toUpperCase()).maybeSingle<WorldRow>();
+  if (!data) throw new HttpError(404, "world_not_found");
   return data;
 }
 
-async function ensurePresenterBinding(admin: Admin, session: SessionRow, userId: string): Promise<void> {
-  const { data: presenter } = await admin.from("profiles").select("id").eq("session_id", session.id).eq("persona_key", "presenter").maybeSingle<{ id: string }>();
-  if (!presenter) return;
-  await admin.from("profile_bindings").upsert({ profile_id: presenter.id, auth_user_id: userId }, { onConflict: "profile_id,auth_user_id", ignoreDuplicates: true });
+async function ensurePresenter(admin: Admin, sessionId: string, userId: string): Promise<void> {
+  const existing = await findProfile(admin, sessionId, userId, "presenter");
+  if (existing) return;
+  const { data } = await admin.from("profiles").insert({ session_id: sessionId, role: "presenter", persona_key: "presenter", display_name: "Apresentador", tagline: "Central da demonstração", avatar: "P", is_synthetic: false }).select("id").single<{ id: string }>();
+  if (data) await admin.from("profile_bindings").insert({ profile_id: data.id, auth_user_id: userId });
 }
 
-async function createSession(admin: Admin, scenarioKey: ScenarioKey, presenterUserId: string): Promise<SessionRow> {
-  const sc = SCENARIOS[scenarioKey];
-  const code = randomCode("MIT");
-  const { data: session, error } = await admin
-    .from("demo_sessions")
-    .insert({ code, scenario: scenarioKey, presenter_auth_user_id: presenterUserId })
-    .select("id, code, scenario, script_cursor, settings, reset_count, created_at, presenter_auth_user_id")
-    .single<SessionRow>();
-  if (error || !session) throw new HttpError(500, "session_create_failed");
-
-  const { data: room } = await admin.from("rooms").insert({ session_id: session.id, code: randomCode("SP"), name: "Arena Nimbus · Sala cooperativa" }).select("id").single<{ id: string }>();
-  if (!room) throw new HttpError(500, "room_create_failed");
-
-  const personas = [
-    { persona_key: "A", role: "player", display_name: sc.personas.A.name, tagline: sc.personas.A.tagline, avatar: sc.personas.A.avatar },
-    { persona_key: "B", role: "player", display_name: sc.personas.B.name, tagline: sc.personas.B.tagline, avatar: sc.personas.B.avatar },
-    { persona_key: "guardian", role: "guardian", display_name: "Responsável de Nico", tagline: "Painel parental (persona sintética)", avatar: "R" },
-    { persona_key: "moderator", role: "moderator", display_name: "Moderação Safe Play", tagline: "Revisão humana de demonstração", avatar: "M" },
-    { persona_key: "presenter", role: "presenter", display_name: "Apresentador", tagline: "Central da demonstração", avatar: "P" },
-  ];
-  const { data: profiles } = await admin
-    .from("profiles")
-    .insert(personas.map((p) => ({ ...p, session_id: session.id })))
-    .select("id, persona_key, role");
-  const byKey = new Map((profiles ?? []).map((p) => [p.persona_key as string, p.id as string]));
-  const a = byKey.get("A");
-  const b = byKey.get("B");
-  const g = byKey.get("guardian");
-  const m = byKey.get("moderator");
-  const pr = byKey.get("presenter");
-  if (!a || !b || !g || !m || !pr) throw new HttpError(500, "profiles_create_failed");
-
-  await admin.from("room_members").insert([
-    { room_id: room.id, profile_id: a },
-    { room_id: room.id, profile_id: b },
-  ]);
-  await admin.from("guardian_links").insert({ guardian_profile_id: g, ward_profile_id: a, room_id: room.id });
-  await admin.from("profile_bindings").insert({ profile_id: pr, auth_user_id: presenterUserId });
-  await admin.from("invites").insert([
-    { session_id: session.id, room_id: room.id, profile_id: a, role: "player", token: randomToken() },
-    { session_id: session.id, room_id: room.id, profile_id: b, role: "player", token: randomToken() },
-    { session_id: session.id, room_id: room.id, profile_id: g, role: "guardian", token: randomToken() },
-    { session_id: session.id, room_id: room.id, profile_id: m, role: "moderator", token: randomToken() },
-  ]);
-  await admin.from("audit_events").insert({ session_id: session.id, room_id: room.id, event_type: "session.created", actor_type: "presenter", rules_version: RULES_VERSION, payload: { scenario: scenarioKey } });
-  return session;
+/** Jogadores do mundo por ordem de entrada: A = criador (primeiro), B = segundo. */
+async function worldSpeakers(admin: Admin, world: WorldRow): Promise<{ A: string | null; B: string | null }> {
+  const { data } = await admin.from("room_members").select("profile_id, joined_at").eq("room_id", world.room_id).order("joined_at", { ascending: true });
+  const ids = (data ?? []).map((m) => m.profile_id as string);
+  return { A: ids[0] ?? null, B: ids[1] ?? null };
 }
 
-async function deleteAnonymousUsers(admin: Admin, sessionId: string, keepUserId: string): Promise<void> {
-  const { data: profiles } = await admin.from("profiles").select("id").eq("session_id", sessionId);
-  const ids = (profiles ?? []).map((p) => p.id as string);
-  if (ids.length === 0) return;
-  const { data: bindings } = await admin.from("profile_bindings").select("auth_user_id").in("profile_id", ids);
-  const users = [...new Set((bindings ?? []).map((b) => b.auth_user_id as string))].filter((u) => u !== keepUserId);
-  for (const u of users) {
-    const { data: other } = await admin.from("profile_bindings").select("profile_id").eq("auth_user_id", u).not("profile_id", "in", `(${ids.join(",")})`).limit(1);
-    if (other && other.length > 0) continue; // usuário participa de outra sessão
-    await admin.auth.admin.deleteUser(u).catch(() => undefined);
-  }
+async function health(admin: Admin, session: GlobalSession) {
+  const { data: breaker } = await admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>();
+  const cfg = claudeConfigFromEnv();
+  return {
+    database: "ok",
+    ai: { configured: Boolean(cfg), model: cfg?.model ?? null, breakerOpenUntil: breaker?.value?.open_until ?? null, failures: breaker?.value?.failures ?? 0, disabledBySetting: Boolean((session.settings ?? {})["llm_disabled"]), forceFailure: Boolean((session.settings ?? {})["force_llm_failure"]) },
+    rulesVersion: RULES_VERSION,
+    serverTime: new Date().toISOString(),
+    settings: session.settings ?? {},
+  };
 }
 
-async function buildStatus(admin: Admin, session: SessionRow) {
-  const sc = SCENARIOS[session.scenario];
+async function buildStatus(admin: Admin, session: GlobalSession, world: WorldRow) {
+  const sc = SCENARIOS[world.scenario];
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const [roomRes, invitesRes, profilesRes, messagesRes, jobsRes, alertsRes, casesRes, ledgerRes, dayLedgerRes, samplesRes, breakerRes, budgetRes] = await Promise.all([
-    admin.from("rooms").select("id, code, name, safety_level, safety_score, contained, analysis_pending").eq("session_id", session.id).limit(1).single(),
-    admin.from("invites").select("role, token, profile_id, uses").eq("session_id", session.id),
+  const [roomRes, membersRes, profilesRes, messagesRes, jobsRes, alertsRes, casesRes, ledgerRes, dayLedgerRes, samplesRes, breakerRes, budgetRes] = await Promise.all([
+    admin.from("rooms").select("id, code, name, safety_level, safety_score, contained, analysis_pending").eq("id", world.room_id).single(),
+    admin.from("room_members").select("profile_id, joined_at").eq("room_id", world.room_id).order("joined_at", { ascending: true }),
     admin.from("profiles").select("id, persona_key, role, display_name, tagline, avatar").eq("session_id", session.id),
-    admin.from("messages").select("id", { count: "exact", head: true }).eq("session_id", session.id),
-    admin.from("analysis_jobs").select("status, degraded, rule_latency_ms, llm_latency_ms, degraded_reason").eq("session_id", session.id),
-    admin.from("alerts").select("level").eq("session_id", session.id),
-    admin.from("cases").select("status").eq("session_id", session.id),
-    admin.from("usage_ledger").select("input_tokens, output_tokens, est_cost_usd, cached, status, model").eq("session_id", session.id),
+    admin.from("messages").select("id", { count: "exact", head: true }).eq("room_id", world.room_id),
+    admin.from("analysis_jobs").select("status, degraded, rule_latency_ms, llm_latency_ms, degraded_reason").eq("room_id", world.room_id),
+    admin.from("alerts").select("level").eq("room_id", world.room_id),
+    admin.from("cases").select("status").eq("room_id", world.room_id),
+    admin.from("usage_ledger").select("input_tokens, output_tokens, est_cost_usd, cached, status, model").eq("room_id", world.room_id),
     admin.from("usage_ledger").select("est_cost_usd").gte("created_at", dayStart.toISOString()),
-    admin.from("metric_samples").select("kind, value_ms").eq("session_id", session.id),
+    admin.from("metric_samples").select("kind, value_ms").eq("room_id", world.room_id),
     admin.from("system_state").select("value").eq("key", "llm_breaker").maybeSingle<{ value: { failures: number; open_until: string | null } }>(),
     admin.from("system_state").select("value").eq("key", "budget").maybeSingle<{ value: Record<string, number> }>(),
   ]);
   const room = roomRes.data;
-  const invites = invitesRes.data;
+  const members = membersRes.data ?? [];
   const profiles = profilesRes.data;
-  const profileIds = (profiles ?? []).map((p) => p.id as string);
-  const { data: bindings } = await admin.from("profile_bindings").select("profile_id").in("profile_id", profileIds);
+  const memberProfiles = members.map((m, i) => ({ slot: i === 0 ? "A" : "B", ...(profiles ?? []).find((p) => p.id === m.profile_id) }));
   const messages = messagesRes.count;
   const jobs = jobsRes.data;
   const alerts = alertsRes.data;
@@ -225,14 +174,14 @@ async function buildStatus(admin: Admin, session: SessionRow) {
   const llmLat = (jobs ?? []).map((j) => j.llm_latency_ms).filter((x): x is number => typeof x === "number" && x > 0).sort((a, b) => a - b);
 
   return {
-    session: { id: session.id, code: session.code, scenario: session.scenario, scriptCursor: session.script_cursor, scriptLength: sc.script.length, settings: session.settings ?? {}, resetCount: session.reset_count, createdAt: session.created_at },
+    world: { id: world.id, code: world.code, name: world.name, status: world.status, scenario: world.scenario, scriptCursor: world.script_cursor, scriptLength: sc.script.length, createdAt: world.created_at },
+    session: { id: session.id, code: session.code, settings: session.settings ?? {} },
     scenario: { key: sc.key, title: sc.title, description: sc.description, expectation: sc.expectation, personas: sc.personas, script: sc.script.map((l, i) => ({ index: i, speaker: l.speaker, text: l.text, note: l.note ?? null, forceLlm: Boolean(l.forceLlm) })) },
     room,
-    invites: (invites ?? []).map((i) => ({ role: i.role, token: i.token, profileId: i.profile_id, uses: i.uses, persona: (profiles ?? []).find((p) => p.id === i.profile_id)?.display_name ?? null })),
-    profiles: profiles ?? [],
+    players: memberProfiles,
     metrics: {
       messages: messages ?? 0,
-      participantsConnected: new Set((bindings ?? []).map((b) => b.profile_id)).size,
+      participantsConnected: members.length,
       analyses: (jobs ?? []).filter((j) => j.status === "completed" || j.status === "degraded").length,
       fallbacks: (jobs ?? []).filter((j) => j.degraded).length,
       failed: (jobs ?? []).filter((j) => j.status === "failed").length,
@@ -257,12 +206,7 @@ async function buildStatus(admin: Admin, session: SessionRow) {
       roomCallLimit: roomLimit,
       roomCallsRemaining: Math.max(0, roomLimit - calls),
     },
-    health: {
-      database: "ok",
-      ai: { configured: Boolean(cfg), model: cfg?.model ?? null, breakerOpenUntil: breaker?.value?.open_until ?? null, failures: breaker?.value?.failures ?? 0, disabledBySetting: Boolean((session.settings ?? {})["llm_disabled"]), forceFailure: Boolean((session.settings ?? {})["force_llm_failure"]) },
-      rulesVersion: RULES_VERSION,
-      serverTime: new Date().toISOString(),
-    },
+    health: await health(admin, session),
   };
 }
 

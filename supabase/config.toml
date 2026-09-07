@@ -41,3 +41,19 @@ import_map = "./functions/deno.json"
 [functions.moderation-action]
 verify_jwt = true
 import_map = "./functions/deno.json"
+
+[functions.game-enter]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.world-create]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.world-join]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.role-login]
+verify_jwt = true
+import_map = "./functions/deno.json"

@@ -234,7 +234,7 @@ do $$ begin
   assert (select count(*) from public.messages) = 1, 'reset removeu mensagens apenas da sessão';
   assert (select count(*) from public.audit_events) = 0, 'reset removeu auditoria da sessão';
   assert (select count(*) from public.cases) = 0, 'reset removeu casos';
-  assert (select count(*) from public.demo_sessions) = 1, 'outra sessão preservada';
+  assert (select count(*) from public.demo_sessions where code <> 'GLOBAL') = 1, 'outra sessão preservada';
   assert (select count(*) from public.glossary_terms where session_id is null) >= 6, 'glossário base preservado';
 end $$;
 
@@ -268,4 +268,33 @@ begin
   update public.rooms set contained = true where code = 'R-OTHER';
   r := public.admin_send_message('R-OTHER', '55555555-5555-5555-5555-555555555555', 'msg', 'k100');
   assert (r->>'error') = 'room_contained', 'contenção bloqueia envio';
+end $$;
+
+
+-- ---------- v2: mundos e lobby ----------
+insert into auth.users (id) values ('66666666-6666-6666-6666-666666666666'), ('77777777-7777-7777-7777-777777777777');
+insert into public.profiles (id, session_id, role, persona_key, display_name) values
+  ('bbbbbbbb-0000-0000-0000-000000000021', (select id from public.demo_sessions where code = 'GLOBAL'), 'player', 'player', 'Ana'),
+  ('bbbbbbbb-0000-0000-0000-000000000022', (select id from public.demo_sessions where code = 'GLOBAL'), 'player', 'player', 'Beto');
+insert into public.profile_bindings (profile_id, auth_user_id) values
+  ('bbbbbbbb-0000-0000-0000-000000000021', '66666666-6666-6666-6666-666666666666'),
+  ('bbbbbbbb-0000-0000-0000-000000000022', '77777777-7777-7777-7777-777777777777');
+insert into public.rooms (id, session_id, code, name) values ('cccccccc-0000-0000-0000-000000000031', (select id from public.demo_sessions where code = 'GLOBAL'), 'W-ROOM1', 'Mundo da Ana');
+insert into public.worlds (id, session_id, room_id, code, name, created_by_profile_id) values ('abababab-0000-0000-0000-000000000001', (select id from public.demo_sessions where code = 'GLOBAL'), 'cccccccc-0000-0000-0000-000000000031', 'W-ANA1', 'Mundo da Ana', 'bbbbbbbb-0000-0000-0000-000000000021');
+insert into public.room_members (room_id, profile_id) values ('cccccccc-0000-0000-0000-000000000031', 'bbbbbbbb-0000-0000-0000-000000000021');
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
+do $$ begin
+  assert (select count(*) from public.world_lobby where status = 'open') = 1, 'Beto vê o mundo aberto da Ana no lobby';
+  assert (select players from public.world_lobby where code = 'W-ANA1') = 1, 'lobby conta 1 jogador';
+  assert (select count(*) from public.messages where room_id = 'cccccccc-0000-0000-0000-000000000031') = 0, 'Beto não lê mensagens de mundo em que não está';
+end $$;
+rollback;
+
+select public.admin_reset_world('abababab-0000-0000-0000-000000000001');
+do $$ begin
+  assert (select count(*) from public.worlds) = 1, 'reset de mundo preserva o mundo';
+  assert (select count(*) from public.room_members where room_id = 'cccccccc-0000-0000-0000-000000000031') = 1, 'reset de mundo preserva membros';
 end $$;
