@@ -30,10 +30,6 @@ enable_signup = false
 verify_jwt = true
 import_map = "./functions/deno.json"
 
-[functions.join-room]
-verify_jwt = true
-import_map = "./functions/deno.json"
-
 [functions.demo-control]
 verify_jwt = true
 import_map = "./functions/deno.json"
@@ -55,5 +51,9 @@ verify_jwt = true
 import_map = "./functions/deno.json"
 
 [functions.role-login]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
+[functions.world-leave]
 verify_jwt = true
 import_map = "./functions/deno.json"
