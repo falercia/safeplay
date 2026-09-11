@@ -145,6 +145,10 @@ A tela do apresentador mostra chamadas, tokens e custo **medidos** pelo ledger, 
 
 Veja [`docs/roteiro-apresentacao.md`](docs/roteiro-apresentacao.md). Estado atual do projeto em [`docs/STATUS.md`](docs/STATUS.md); decisões do redesign em [`docs/REDESIGN-v2.md`](docs/REDESIGN-v2.md).
 
+## Compartilhamento (Open Graph)
+
+`app/layout.tsx` define título, descrição, `metadataBase` e cartões Open Graph/Twitter; `app/opengraph-image.png` (1200×630) é servida automaticamente pelo Next.js como `og:image`. Para validar após um deploy: LinkedIn Post Inspector (https://www.linkedin.com/post-inspector/) ou https://opengraph.xyz.
+
 ## Créditos e licenças
 
 - Logotipo e paleta do Safe Play: azul profundo (base), teal (seguro), laranja (atenção), vermelho (crítico), em `public/brand`.

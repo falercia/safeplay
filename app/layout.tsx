@@ -2,9 +2,23 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { LangProvider } from "@/lib/i18n";
 
+const SITE_URL = "https://safe-play-poc.vercel.app";
+const DESCRIPTION = "Proteção infantil em chats de jogos: detecção longitudinal de padrões de risco (o padrão, não a frase), alerta parental em linguagem simples, revisão humana com justificativa e auditoria. Projeto de Impacto do MIT Professional Education, prova de conceito com dados sintéticos.";
+
 export const metadata: Metadata = {
-  title: { default: "Safe Play · POC", template: "%s · Safe Play" },
-  description: "Prova de conceito acadêmica: detecção longitudinal de padrões de risco em chats de jogos, com alerta parental, revisão humana e auditoria. Dados sintéticos.",
+  metadataBase: new URL(SITE_URL),
+  title: { default: "Safe Play", template: "%s · Safe Play" },
+  description: DESCRIPTION,
+  applicationName: "Safe Play",
+  openGraph: {
+    type: "website",
+    url: SITE_URL,
+    siteName: "Safe Play",
+    title: "Safe Play · proteção infantil em chats de jogos",
+    description: DESCRIPTION,
+    locale: "pt_BR",
+  },
+  twitter: { card: "summary_large_image", title: "Safe Play · proteção infantil em chats de jogos", description: DESCRIPTION },
   robots: { index: false, follow: false },
 };
 
