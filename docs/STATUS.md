@@ -1,4 +1,4 @@
-# Estado do projeto · atualizado 2026-09-06
+# Estado do projeto · atualizado 2026-09-11
 
 ## Pronto e verificado
 - Motor de risco, schema/RLS, Edge Functions, front-end: lint, typecheck, build, 20 testes unitários e testes SQL passando.
@@ -24,7 +24,15 @@
 - Motor (rules-2026.09.07-2): memória longitudinal (sinais apontados pela LLM em avaliações anteriores continuam valendo com decaimento; o score nunca cai mais rápido que a meia-hora de meia-vida entre avaliações) e padrões novos ("você tem whatsapp?", comentário sobre aparência). Motivo: em teste real, uma resposta inócua da vítima derrubava o score de ~20 para 8. 23 testes unitários passando.
 - Aviso de acolhimento direcionado (migration `20260907001000_risk_focus`): `rooms.risk_focus_profile_id` aponta quem concentra ≥60% do peso dos sinais (hipótese, auditada); o aviso no chat aparece só para os demais membros. Motivo: no teste real, o mesmo aviso aparecia no chat de quem emitia os sinais, denunciando o monitoramento. Confirmado que a contenção em crítico é sempre ação humana (botão "Conter" na moderação), conforme a proposta. 26 testes unitários.
 - Repositório GitHub: https://github.com/falercia/safeplay (branch `main`). Deploy na Vercel ainda é manual via CLI; opcional: conectar o repo na Vercel para deploy automático.
-- Pendências: ensaio final do roteiro (docs/roteiro-apresentacao.md); ajustes que surgirem do feedback dos colegas.
+
+## Sessão 4 (2026-09-11)
+- Open Graph para compartilhamento (LinkedIn): título "Safe Play · proteção infantil em chats de jogos", descrição, `metadataBase`, cartão Twitter e `app/opengraph-image.png` (1200×630: marca, "Detectar o padrão, não a frase", captura do jogo). Validado na URL pública. Commit `9cf9b9a`.
+- Texto de currículo/portfólio gerado com números verificados em 10/09: 25 pessoas distintas como jogadores (48 entradas), 99 análises com LLM (US$ 0,33 no total), 23–26 testes unitários, 3 etapas E2E, ~8,3 mil linhas, 37+ commits.
+
+## Ponto de parada (2026-09-11)
+- Nada pendente de commit. Container = Mac = GitHub em `9cf9b9a`. Vercel e Edge Functions no ar com essa versão. Banco: só a sessão GLOBAL (mundos apagados em 07/09; o que existir agora foi criado depois).
+- Primeira coisa da próxima sessão: perguntar se houve feedback dos colegas/banca; se o Fabio compartilhou no LinkedIn, checar o cartão no Post Inspector.
+- Pendências: ensaio final do roteiro (docs/roteiro-apresentacao.md); ajustes do feedback; opcional conectar repo na Vercel.
 
 ## Deploy público
 - Vercel: https://safe-play-poc.vercel.app (projeto `safe-play-poc`, deploy via CLI a partir do container; env NEXT_PUBLIC_* configuradas). Cenário falso positivo validado por E2E contra a URL pública.
